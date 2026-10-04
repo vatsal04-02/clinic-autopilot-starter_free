@@ -59,6 +59,12 @@ Send (Toggle — the webhook's "ready" column), Created_At (DateTime)
 Key (Text), Value (Text). Rows: clinic_name, open_time, close_time, working_days, owner_phone,
 staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE
 
+How the workflows read the values:
+- `open_time`, `close_time`: 24-hour `09:00`, `19:30` (`9:00 AM` also works). Missing or unreadable = 08:00-21:00.
+- `working_days`: `Mon-Sat`, `Mon,Tue,Thu` or `daily`. Missing or unreadable = every day.
+- `owner_phone`, `TEST_PHONE`: one Indian mobile number in any common format (`98765 43210`, `+91 98765 43210`); the workflows turn it into `+91XXXXXXXXXX`.
+- `TEST_MODE`: `true` or `false`. A missing row, or anything else, counts as ON (patient messages go to `TEST_PHONE`).
+
 ### Run_Log
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime)
 
