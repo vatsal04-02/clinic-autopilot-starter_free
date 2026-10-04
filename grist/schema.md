@@ -1,0 +1,76 @@
+# Grist template: "Clinic CRM Template"
+
+Build this once by hand in Grist, then duplicate it per clinic. Column names are exact:
+n8n and every workflow depend on them. Change a name here first, then in the template.
+
+## Tables
+
+### Leads
+| Column | Type | Notes |
+|---|---|---|
+| Lead_ID | Text | `L-YYYYMMDD-####`, set by n8n |
+| Created_At | DateTime (Asia/Kolkata) | set by n8n |
+| Name | Text | |
+| Phone | Text | always `+91XXXXXXXXXX` |
+| Source | Choice | Website, WhatsApp, Instagram, Call, Walk-in, Referral |
+| Page_URL | Text | |
+| UTM_Campaign | Text | |
+| Enquiry | Text | patient's own words |
+| AI_Summary | Text | set by n8n (optional) |
+| Likely_Service | Text | set by n8n (optional) |
+| Status | Choice | New (red), Contacted (amber), Booked (blue), Converted (green), Lost (grey) |
+| Owner | Text | staff name |
+| Next_Action_At | DateTime | |
+| First_Response_At | DateTime | set when status leaves New |
+| Lost_Reason | Choice | No response, Price, Distance, Went elsewhere, Not a fit, Other |
+| Opted_Out | Toggle | |
+| Escalated | Toggle | set by n8n |
+| Followup_Sent | Toggle | set by n8n |
+| Notes | Text | no medical history |
+| Week | Formula | `$Created_At.date() - datetime.timedelta(days=$Created_At.weekday())` |
+| Was_Booked | Formula | `$Status in ("Booked", "Converted")` |
+| Response_Minutes | Formula | `($First_Response_At - $Created_At).total_seconds() / 60 if $First_Response_At else None` |
+
+### Appointments
+| Column | Type | Notes |
+|---|---|---|
+| Booking_UID | Text | Cal.com booking id, unique |
+| Lead | Reference → Leads | |
+| Service | Text | |
+| Physio | Text | |
+| Start | DateTime | |
+| End | DateTime | |
+| Status | Choice | Booked, Rescheduled, Cancelled, Completed, No-show |
+| Fee_INR | Numeric | hidden from front desk by access rule |
+| R24_Sent, R2_Sent, Rebook_Sent, Review_Sent | DateTime | set by n8n |
+| Week | Formula | `$Start.date() - datetime.timedelta(days=$Start.weekday())` |
+| Showed | Formula | `$Status == "Completed"` |
+| No_Show | Formula | `$Status == "No-show"` |
+
+### Conversations
+Lead (Reference → Leads), Phone, Last_Inbound_At (DateTime), Unread (Integer), Automation_Paused (Toggle), Assigned_To (Text)
+
+### Messages
+Conversation (Reference → Conversations), Direction (Choice: In, Out), Body (Text), Template (Text), Sent_By (Text),
+WA_Message_ID (Text, unique), Status (Choice: queued, needs_template, sent, delivered, read, failed),
+Send (Toggle — the webhook's "ready" column), Created_At (DateTime)
+
+### Settings
+Key (Text), Value (Text). Rows: clinic_name, open_time, close_time, working_days, owner_phone,
+staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE
+
+### Run_Log
+Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime)
+
+## Pages
+1. **Today** — 4 card lists: Status = New; Next_Action_At ≤ today; tomorrow's Booked appointments; yesterday's No-show with Rebook_Sent empty
+2. **Pipeline** — 5 card lists side by side (one per Status) + summary table by Status
+3. **Inbox** — Conversations table → linked Messages table (Select By: Conversation)
+4. **Appointments** — Calendar widget on Start + table filtered to today
+5. **Reports** — summary tables by Week / Source / Status + charts (see the Option B doc, section 7)
+
+## Access rules
+- Owner group: everything
+- Front desk (Editors): cannot see Appointments.Fee_INR; cannot delete Leads/Appointments
+- Nobody edits Messages where Direction = In, or Run_Log
+- Only the agency account edits Settings and table structure

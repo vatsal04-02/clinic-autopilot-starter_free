@@ -1,0 +1,4 @@
+.env
+*.grist
+backups/
+node_modules/
