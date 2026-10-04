@@ -62,6 +62,18 @@ staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE
 ### Run_Log
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime)
 
+## Agency Registry (a separate Grist doc, owned by the agency)
+One doc, one table. Every workflow reads it first to find the clinic (see CLAUDE.md "Clinic lookup"). Never hard-code a clinic.
+
+### Clinics
+| Column | Type | Notes |
+|---|---|---|
+| Clinic_Slug | Text | unique; lowercase letters, digits, hyphens (e.g. `demo-physio`); the clinic's website sends it |
+| Clinic_Name | Text | |
+| Grist_Doc_ID | Text | the clinic's Grist doc id (the long id in the doc's URL) |
+| WA_Phone_Number_ID | Text | Meta WhatsApp phone_number_id; empty until WhatsApp is connected |
+| Active | Toggle | workflows ignore clinics where this is off |
+
 ## Pages
 1. **Today** — 4 card lists: Status = New; Next_Action_At ≤ today; tomorrow's Booked appointments; yesterday's No-show with Rebook_Sent empty
 2. **Pipeline** — 5 card lists side by side (one per Status) + summary table by Status
