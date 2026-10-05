@@ -3,8 +3,8 @@
 | File | What it is |
 |---|---|
 | `clinic-autopilot-single-workflow.json` | **The workflow to import.** It has 139 nodes: the 125 exported nodes (118 working nodes plus 7 of your own notes) and 14 section notes. |
-| `build-merged.js` | Rebuilds that file from your exports: `node n8n/merged/build-merged.js --in <folder with the W*.json exports>` |
-| `validate-merged.js` | Runs the 15 checks from section 7. Add `--in <exports folder>` to also prove that nothing else changed. |
+| `build-merged.js` | Rebuilds that file from your exports: `node n8n/merged/build-merged.js --in <folder with the W*.json exports>`. It applies the 5 fixes from section 3; `--no-fixes` builds the merge exactly as exported. |
+| `validate-merged.js` | Runs the 15 checks from section 7 plus 2 more (safety guards intact; nothing else changed). Add `--in <exports folder>` to prove that only the 7 fixed nodes differ from your exports. |
 | `merged.flow.test.js` | Runs the merged file end to end in the simulator, one trigger at a time, with a fake Grist and a fake Meta. |
 
 Run all checks with `node n8n/tests/run-all.js`. It stops on the first failure.
@@ -59,15 +59,15 @@ The only links in the workflows themselves are W3/W5/W6 → W12 (each sends one 
 
 ## 3. Issues found before merge
 
-**None of these were changed.** All are still in the merged file exactly as exported. The simulation test asserts the important ones (I-01, I-02, I-04, I-08, I-12), so they can't change silently.
+**Status of this build:** at your request, **I-01 to I-05 are FIXED** (marked ✅ below; exactly 7 nodes changed, listed in section 5b). Every other issue is **still in the file exactly as exported**; the simulation test asserts I-08 and I-12 so they can't change silently.
 
 | # | Severity | Module · node | Problem | Why it matters | Merge needs a change? | Safest fix |
 |---|---|---|---|---|---|---|
-| I-01 | **CRITICAL** | W5 · Code in JavaScript | Replaces the guard's `decision`: `to` is the **patient's** number, `send = item.send !== false`, `test_mode = Boolean(text)`. It also runs in "all items" mode with `$json`, so only the first item comes out. It also hard-codes `grist_base_url` and sets `lead_row_id: null`. | With TEST_MODE on, reminders go to the **real patient**, not TEST_PHONE. Only the W12 allowlist stops them (proved in the test). If you switch W12 to `live`, patients get messages while Settings still says TEST_MODE. | No | Use `decision: item.decision` (from Decide send). Set Mode to "Run Once for Each Item". Keep `grist_base_url`/`doc_id` from the item. |
-| I-02 | HIGH | W5 · Decide send | `Execute Once` is on (plus `retryOnFail` and `alwaysOutputData`). | Only the **first** due reminder is handled each run. Others wait 15 min, and some will miss the 4 h / 75 min window. | No | Turn Execute Once off. Remove retry and always-output on this Code node. |
-| I-03 | HIGH | W12 · Prepare request | Uses `new Date('2026-10-05T10:00:00+05:30')` instead of `Date.now()`. | W12's own quiet-hours check always thinks it is 10:00. Today only the callers' guards stop night sends. | No | Use `Date.now()` again. |
-| I-04 | HIGH | W12 · Find conversation, Create conversation, Add message | Use the **WhatsApp Cloud API** credential to call **Grist**. | Your Meta token is sent to Grist, Grist refuses, and inbox logging never works (`inbox_logged = false`). Sending itself still works. | No | Pick **Header Auth account 2** in those 3 nodes. |
-| I-05 | HIGH | W6 · Decide send | Same fixed date as I-03. | W6 has no working quiet-hours check. It runs at 10:00, so there is no risk unless someone starts it by hand at night. | No | Use `Date.now()` again. |
+| ✅ I-01 | **CRITICAL** | W5 · Code in JavaScript | Replaces the guard's `decision`: `to` is the **patient's** number, `send = item.send !== false`, `test_mode = Boolean(text)`. It also runs in "all items" mode with `$json`, so only the first item comes out. It also hard-codes `grist_base_url` and sets `lead_row_id: null`. | With TEST_MODE on, reminders go to the **real patient**, not TEST_PHONE. Only the W12 allowlist stops them (proved in the test). If you switch W12 to `live`, patients get messages while Settings still says TEST_MODE. | No | **FIXED:** `decision` is now `item.decision` from Decide send (no decision = no send), and the node runs once per item. `grist_base_url` was left as exported. |
+| ✅ I-02 | HIGH | W5 · Decide send | `Execute Once` is on (plus `retryOnFail` and `alwaysOutputData`). | Only the **first** due reminder is handled each run. Others wait 15 min, and some will miss the 4 h / 75 min window. | No | **FIXED:** Execute Once removed. `retryOnFail` and `alwaysOutputData` were left as exported. |
+| ✅ I-03 | HIGH | W12 · Prepare request | Uses `new Date('2026-10-05T10:00:00+05:30')` instead of `Date.now()`. | W12's own quiet-hours check always thinks it is 10:00. Today only the callers' guards stop night sends. | No | **FIXED:** `Date.now()`. |
+| ✅ I-04 | HIGH | W12 · Find conversation, Create conversation, Add message | Use the **WhatsApp Cloud API** credential to call **Grist**. | Your Meta token is sent to Grist, Grist refuses, and inbox logging never works (`inbox_logged = false`). Sending itself still works. | No | **FIXED:** the 3 nodes use **Header Auth account 2**. `W12 – Meta send` still uses the WhatsApp credential. |
+| ✅ I-05 | HIGH | W6 · Decide send | Same fixed date as I-03. | W6 has no working quiet-hours check. It runs at 10:00, so there is no risk unless someone starts it by hand at night. | No | **FIXED:** `Date.now()`. |
 | I-06 | MEDIUM | W3 · Find due | `// if (!base.open_now) return;` is commented out. | Staff alerts ignore clinic hours and working days. The 21:00–08:00 quiet hours still apply. | No | Remove the `//` when testing is done. |
 | I-07 | MEDIUM | W4 · Config | The Cal.com secret sits in plain text in a Set node, and the export shows the **same value as the earlier export** (you said you rotated it). | The rotation may not have been saved, and anyone with the export has the secret. | **Yes:** replaced by a placeholder in this file (public repo). | Paste the current secret after import. Check Cal.com uses the same one. |
 | I-08 | MEDIUM | W3 / W5 / W6 · Send?, Sent? | The "false" outputs go nowhere. | A blocked or failed send leaves **no Run_Log row**. The flag stays unset, so it is retried every run. | No | Add a Run_Log "skipped/failed" write on the false outputs. |
@@ -76,7 +76,7 @@ The only links in the workflows themselves are W3/W5/W6 → W12 (each sends one 
 | I-11 | LOW | W3 / W5 · Clinics | A query parameter with no name and value `=`. | The request ends in `?=`. Harmless today. | No | Delete that row. |
 | I-12 | LOW | W1 · Build update, W6 · Plan follow-ups | Read `Lead_ID`, but your column is `Lead_id`. | Run_Log shows `row N` instead of the lead id. | No | Change to `Lead_id`. |
 | I-13 | LOW | W1 · Staff alert (stub), W4 · Plan writes | No WhatsApp yet. W4 · Resolve clinic also doesn't pass `wa_phone_number_id`. | No staff alert and no booking confirmation. | No | Wire them to W12 later, the same way as W3. |
-| I-14 | LOW | W5 · Find due | Has no `lead_row_id` in its output. | Once I-04 is fixed, W5 inbox rows won't be linked to the lead. | No | Add `lead_row_id: f.Lead`. |
+| I-14 | LOW | W5 · Find due | Has no `lead_row_id` in its output. | Now that I-04 is fixed and the inbox is written, W5 inbox rows are not linked to the lead. | No | Add `lead_row_id: f.Lead`. |
 | I-15 | INFO | W3 · Config `test_phone` | Not used anywhere. It held your own number. | — | **Yes:** placeholder (public repo). | Delete it, or paste the number back. |
 | I-16 | INFO | W12 · Read reply / Plan inbox / Add message / Return result | Use `$('…').first()`. | W12 only works when called with **one item per run**. So the merge keeps the Execute Workflow call (mode "each") and does not wire W3/W5/W6 straight into W12's nodes. With straight wires, every item would get the first item's result. | Shaped the merge | Keep the calls in mode "each". |
 | I-17 | INFO | W11 (merge effect) | Alerts now show the merged workflow's name. | The module shows in **Step** (e.g. `W4 – Reject`). A W12 failure may raise two alerts (the W12 run and its caller). | Yes (unavoidable) | — |
@@ -141,12 +141,25 @@ If test step 7 below shows no alert, set Settings > Error workflow to your old *
    - The file imports as **inactive** and has no workflow id; n8n assigns one.
 5. **Public repo**: placeholders replace the Cal.com secret (`W4 – Config`) and your phone number in 3 places (`W3 – Config` test_phone, `W12 – Config` w12_allowlist, `W12 – Test input` decision.to).
 
-**Nothing else changed.** `validate-merged.js --in <exports>` compares all 125 nodes with the exports and finds them identical. That covers:
-- ids, types and versions
-- credentials, webhook ids, retry/once/error settings
-- every parameter and every connection
+### 5b. Fixes you asked for (not merge changes)
 
-The comparison allows only for changes 1, 3 and 5.
+Exactly **7 nodes** differ from your exports. Node ids, connections, settings, webhook paths, schedules, Grist ids and tables, TEST_MODE and `w12_send_mode = allowlist` are untouched.
+
+| # | Node | Node id | Change |
+|---|---|---|---|
+| 1 | `W5 – Code in JavaScript` | `c0e82482-3747-4935-ab4d-03801477ed40` | **I-01.** The `to` / `send` lines and the rebuilt `decision {send, to, reason, test_mode: Boolean(…)}` are replaced by `decision = item.decision \|\| {send: false, …}` (no decision = no send). The recipient now always comes from Decide send (TEST_MODE → TEST_PHONE) and W12 checks it again. Mode changed from "all items" to "once for each item" (needed so every reminder is processed). |
+| 2 | `W5 – Decide send` | `b6955746-a854-434e-92dd-a0399575da6c` | **I-02.** `Execute Once` removed. |
+| 3 | `W6 – Decide send` | `606eff0a-8f70-40c3-8862-e1a6788b54a8` | **I-05.** `now_ms: new Date('2026-10-05T10:00:00+05:30').getTime()` → `now_ms: Date.now()`. |
+| 4 | `W12 – Prepare request` | `9ea2ef1c-1da9-45b5-9646-bd1788b6f9bd` | **I-03.** The same fixed clock → `Date.now()`. |
+| 5 | `W12 – Find conversation` | `0033ca1d-9414-42e6-a79d-8e1e11474d04` | **I-04.** Credential: WhatsApp Cloud API → Header Auth account 2 (`9J6XxrIQoFDcQZ0Y`, the one every other Grist node uses). |
+| 6 | `W12 – Create conversation` | `e439b820-9da6-456c-b508-36f9a1bd98a2` | **I-04.** Same. |
+| 7 | `W12 – Add message` | `dfa54d97-9f21-421e-a028-7ea40292226a` | **I-04.** Same. |
+
+`W12 – Meta send` still uses **WhatsApp Cloud API**, and it is the only node that does.
+
+Quiet hours (21:00–08:00 IST) are enforced again in W3, W5, W6 **and** in W12 itself. So W12 refuses to send at night even when called by hand, and the manual test only works between 08:00 and 21:00 IST.
+
+**Nothing else changed.** `validate-merged.js --in <exports>` compares all 125 nodes with the exports: 118 are identical (ids, types, versions, credentials, retry/once/error settings, parameters) and the 7 above differ only as listed. All connections are identical. The comparison allows only for changes 1, 3 and 5 from this section and the 5b fixes.
 
 ## 6. Final n8n JSON
 
@@ -170,16 +183,24 @@ PASS 10. independent schedules stay independent (own rule, disjoint node sets) �
 PASS 11. webhook branches stay independent (no node shared with any other trigger)
 PASS 12. W12 receives the fields it reads from every caller
 PASS 13. W12 returns its result to the calling branch — Call -> W3 – Sent? / W5 – Sent? / W6 – Sent?
-PASS 14. credentials referenced correctly — Header Auth account 2 x31, WhatsApp Cloud API x4, Header Auth account x1, Telegram account x1
+PASS 14. credentials referenced correctly — Header Auth account 2 x34, WhatsApp Cloud API x1 (W12 – Meta send only), Header Auth account x1, Telegram account x1
 PASS 15. no secret or token values in the file (placeholders only)
-PASS 16. nothing else changed: 125 exported nodes identical
+PASS 16. the safety guards are intact (real clock everywhere, decision never rebuilt, TEST_MODE / allowlist settings unchanged)
+PASS 17. nothing else changed: 118 exported nodes identical; 7 differ ONLY by the 5 fixes
 ```
+(Checks 16 and 17 are extra. They fail on the as-exported merge and on each fix reverted one by one: I tested that.)
 
-`merged.flow.test.js` passes 14 simulated scenarios:
+`merged.flow.test.js` passes 25 simulated scenarios (each fix reverted on its own makes it fail):
 - **W1:** creates a lead, skips a duplicate, rejects an unknown clinic.
 - **W3:** 2 leads become 2 separate W12 runs, and each result returns to its own item (TEST_PHONE, Escalated, Run_Log). An allowlist block returns `sent=false`. Quiet hours hold.
-- **W5:** shows I-01 and I-02; an allowlisted send sets R24_Sent.
-- **W6:** follow-ups go out through W12 and set Followup_Sent; inbox logging fails (I-04).
+- **W5:**
+  - Both due reminders are processed (I-02).
+  - With TEST_MODE on, Meta only ever gets TEST_PHONE, even when both patients are allowlisted in W12 (I-01).
+  - TEST_MODE off sends to the patient and the allowlist still blocks others. A missing TEST_MODE means ON.
+  - Opted_Out and the R24_Sent flag are respected. Nothing is sent at 22:00 or 03:00.
+  - The fixed node never turns "no send" into "send".
+- **W6:** follow-ups go out through W12 (TEST_PHONE) and set Followup_Sent. The inbox rows are written (I-04), and a second message reuses the conversation. Quiet hours follow the real clock (07:59 / 21:00 / 22:00 / 03:00 blocked, 08:00 / 20:59 send) (I-05).
+- **W12 called directly:** the same boundaries hold in W12 itself (I-03). Not allowlisted → blocked. Caller said no → not sent. A patient message is logged to Conversations + Messages with the Grist credential (I-04).
 - **W4:** a signed booking is written; the placeholder secret fails safe.
 - **W11:** the alert names `W4 – Reject`.
 - **W12:** the manual test with the placeholder sends nothing.
@@ -193,10 +214,10 @@ PASS 16. nothing else changed: 125 exported nodes identical
 | Triggers valid | ✅ 2 webhooks + 1 unused test webhook, 3 schedules, 1 Error Trigger, 1 sub-workflow trigger, 1 manual |
 | Schedules preserved | ✅ 10 min / 15 min / `0 10 * * *` |
 | Webhooks preserved | ✅ `website-lead` (Header Auth), `cal`, `cal-w4-test` |
-| Credentials preserved | ✅ by id and name. W12's 3 inbox nodes still use the Meta credential (I-04, as exported). |
+| Credentials preserved | ✅ by id and name, none added. The 3 W12 inbox nodes now use the Grist credential (fix I-04); `W12 – Meta send` is the only node with the WhatsApp credential. |
 | W12 centralized | ✅ the only Meta node in the file is `W12 – Meta send` |
 | W11 safe | ✅ no errorWorkflow setting, nothing on the error path can call or raise |
-| TEST_MODE preserved | ✅ Settings TEST_MODE logic, TEST_PHONE and `w12_send_mode = allowlist` are unchanged. ⚠️ W5 bypasses TEST_MODE (I-01, as exported). |
+| TEST_MODE preserved | ✅ TEST_MODE logic, TEST_PHONE and `w12_send_mode = allowlist` are unchanged. W5 no longer bypasses TEST_MODE (fix I-01). Nothing in the file turns TEST_MODE off; it lives in Grist Settings. |
 | No secrets exposed | ✅ placeholders only, no token patterns |
 | Future modules can be added | ✅ reserved sections, naming rule, how to call W12 (SECTION 00 / FUTURE) |
 
@@ -212,8 +233,8 @@ What I could not check here: a real n8n import and a run against your Grist and 
    - `W12 – Config` > `w12_allowlist` (your number only)
    - `W12 – Test input` > `decision.to` (your number)
 4. Keep `w12_send_mode = allowlist`. Keep Settings `TEST_MODE = TRUE` and `TEST_PHONE` = your number.
-5. Optional, but recommended before step 5: fix I-01, I-02 and I-04 (one setting or line each).
-6. **Save.** Sends call the saved version.
+5. **Save.** Sends call the saved version.
+6. Test between 08:00 and 21:00 IST. Quiet hours are enforced in W12 as well, so a send at night is refused on purpose.
 
 **1. W12 first, because everything else depends on it.**
 1. Click play on `W12 – Manual test`.
@@ -241,10 +262,11 @@ What I could not check here: a real n8n import and a run against your Grist and 
 
 **5. W5.**
 1. Deactivate the old **W5**.
-2. ⚠️ Because of I-01, use a test appointment whose LEADS phone is **your own number**. The allowlist then only lets your phone through.
-3. Make the Start 21 h from now and click play on `W5 – Every 15 minutes`.
-4. Expect one `hello_world`, `R24_Sent` filled, and a Run_Log row.
-5. Run it again: nothing should be sent, because the flag is already set.
+2. Make a test appointment (Status Booked) whose lead has your own number, with Start 21 h from now. For a second check, add a second one for another lead (Start 22 h from now); both should be processed.
+3. Click play on `W5 – Every 15 minutes`.
+4. Expect one `hello_world` per due reminder on **TEST_PHONE** (even if the lead has another number), `R24_Sent` filled, and a Run_Log row each.
+5. Run it again: nothing should be sent, because the flags are already set.
+6. Check `W12 – Return result` for `inbox_logged`. The patient's number appears in Conversations and the message in Messages.
 
 **6. W6.**
 1. Deactivate the old **W6**.
@@ -252,7 +274,7 @@ What I could not check here: a real n8n import and a run against your Grist and 
 3. Click play on `W6 – Daily 10:00` between 08:00 and 21:00.
 4. Expect `hello_world` on TEST_PHONE, Followup_Sent ticked, and a Run_Log row.
 5. Run it again: nothing should be sent.
-6. Check that `inbox_logged` is true. If it is false, I-04 is not fixed yet.
+6. Check that `inbox_logged` is true and that Conversations and Messages got a row. This is the first time the real inbox path runs. If it says false, read `inbox_error` (usually a column that is missing or named differently in your Grist). The message itself has already been sent and is not affected.
 
 **7. W11.**
 1. With the merged workflow active, send a failing production request: `curl -X POST https://<your-n8n>/webhook/cal?clinic=demo-clinic -d '{}' -H 'Content-Type: application/json'`. The bad signature makes `W4 – Reject` fail.

@@ -9,7 +9,7 @@ const assert = require('assert');
 const crypto = require('crypto');
 const { simulate, FakeGrist, COLUMNS, CHOICES, DATETIME, TOGGLE } = require('../tests/n8n-sim');
 
-const FILE = path.join(__dirname, 'clinic-autopilot-single-workflow.json');
+const FILE = process.env.MERGED_FILE || path.join(__dirname, 'clinic-autopilot-single-workflow.json');   // MERGED_FILE: test another build
 const merged = JSON.parse(fs.readFileSync(FILE, 'utf8'));
 const SELF = 'MERGED_WF_ID';              // the id n8n gives the workflow on import; {{ $workflow.id }} resolves to it
 const SECRET = 'testsecret-123';
@@ -122,30 +122,83 @@ const newLead = (id, minutesAgo, over = {}) => ({ id, fields: { Lead_id: `L-1-${
 
 // ================================================================ W5 -> W12 -> W5
 console.log('W5 reminders (through the W12 engine)');
-const appt = (id, lead, startInMin, over = {}) => ({ id, fields: { Booking_UID: `uid${id}`, Lead: lead, Service: 'Assessment', Physio: 'Dr Rao', Start: sec(NOW + startInMin * 60000), End: sec(NOW + (startInMin + 45) * 60000), Status: 'Booked', ...over } });
+const appt = (id, lead, startInMin, over = {}, at = NOW) => ({ id, fields: { Booking_UID: `uid${id}`, Lead: lead, Service: 'Assessment', Physio: 'Dr Rao', Start: sec(at + startInMin * 60000), End: sec(at + (startInMin + 45) * 60000), Status: 'Booked', ...over } });
+const PATIENT2 = '9811111111';
+const patients = () => [newLead(1, 3000, { Status: 'Booked', Phone: `+91${PATIENT}` }), newLead(2, 3000, { Status: 'Booked', Phone: `+91${PATIENT2}` })];
+const toMeta = (meta) => meta.calls.map((c) => c.body.to);
 {
-  const leads = [newLead(1, 3000, { Status: 'Booked', Phone: `+91${PATIENT}` }), newLead(2, 3000, { Status: 'Booked', Phone: '+919811111111' })];
+  const leads = patients();
   const appts = [appt(1, 1, 23 * 60), appt(2, 2, 22 * 60)];
-  const { r, g, meta } = run('W5 – Every 15 minutes', [{ json: {} }], { g: grist({ leads, appts }) });
+  // Both patients are on the W12 allowlist ON PURPOSE: if the TEST_MODE re-route were lost, W12 would let them through.
+  const wide = wfWith({ allowlist: `${TEST_PHONE}, ${PATIENT}, ${PATIENT2}` });
+  const { r, g, meta } = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, g: grist({ leads, appts }) });
   assert.strictEqual(r.error, null, JSON.stringify(r.error));
   onlyModule(r, 'W5');
   assert.strictEqual(r.runData['W5 – Find due'].length, 2, 'two reminders are due');
-  assert.strictEqual(r.runData['W5 – Decide send'].length, 1, 'ISSUE I-02: Decide send has "Execute Once" on -> only the first is handled');
-  assert.strictEqual(r.runData['W5 – Decide send'][0].json.decision.to, `+91${TEST_PHONE}`, 'the guard picked TEST_PHONE (TEST_MODE)');
-  const handed = r.runData['W5 – Code in JavaScript'][0].json;
-  assert.strictEqual(handed.decision.to, `91${PATIENT}`, 'ISSUE I-01: Code in JavaScript replaced the guard decision with the PATIENT number');
-  assert.strictEqual(meta.calls.length, 0, 'the W12 allowlist is the only thing that stopped a real patient message');
-  assert.match(r.runData["W5 – Call 'W12 - WhatsApp send'"][0].json.send_error, /not in the W12 allowlist/);
-  assert.deepStrictEqual(rows(g, 'Appointments').map((x) => x.R24_Sent), [undefined, undefined]);
-  ok('as exported: 2 due -> 1 handled; TEST_MODE re-route lost in "W5 – Code in JavaScript"; W12 allowlist blocks the patient number; no flag');
+  assert.strictEqual(r.runData['W5 – Decide send'].length, 2, 'FIX I-02: every due reminder goes through Decide send');
+  assert.strictEqual(r.runData['W5 – Code in JavaScript'].length, 2, 'FIX I-01: both items leave "Code in JavaScript" (per-item mode)');
+  assert.strictEqual(r.subRuns.length, 2);
+  r.runData['W5 – Decide send'].forEach((d, i) => {
+    assert.strictEqual(d.json.decision.to, `+91${TEST_PHONE}`, 'the guard picked TEST_PHONE (TEST_MODE is TRUE)');
+    assert.deepStrictEqual(r.runData['W5 – Code in JavaScript'][i].json.decision, d.json.decision, 'FIX I-01: the decision reaches W12 exactly as Decide send made it');
+  });
+  assert.deepStrictEqual(toMeta(meta), [`91${TEST_PHONE}`, `91${TEST_PHONE}`], 'FIX I-01: with TEST_MODE on, Meta only ever gets TEST_PHONE');
+  assert(!meta.calls.some((c) => [PATIENT, PATIENT2].some((p) => c.body.to.endsWith(p))), 'a patient number reached Meta in TEST_MODE');
+  assert.deepStrictEqual(rows(g, 'Appointments').map((x) => x.R24_Sent), [sec(NOW), sec(NOW)], 'both reminders: flag set after the send');
+  assert.deepStrictEqual(rows(g, 'Run_Log').map((x) => x.Record), ['uid1 (r24)', 'uid2 (r24)']);
+  ok('FIX I-01 + I-02: 2 due reminders -> both processed; TEST_MODE keeps both on TEST_PHONE even though both patients are allowlisted in W12; flags + Run_Log for both');
 
-  const allowPatient = run('W5 – Every 15 minutes', [{ json: {} }], { w: wfWith({ allowlist: `${TEST_PHONE}, ${PATIENT}` }), g: grist({ leads, appts }) });
-  assert.strictEqual(allowPatient.r.error, null, JSON.stringify(allowPatient.r.error));
-  assert.strictEqual(allowPatient.meta.calls.length, 1);
-  assert.strictEqual(allowPatient.meta.calls[0].body.to, `91${PATIENT}`, 'goes to the patient although TEST_MODE is TRUE (issue I-01)');
-  assert.strictEqual(rows(allowPatient.g, 'Appointments')[0].R24_Sent, sec(NOW));
-  assert.deepStrictEqual(rows(allowPatient.g, 'Run_Log').map((x) => x.Record), ['uid1 (r24)']);
-  ok('patient number allowlisted: W12 sends, result returns to W5, R24_Sent + Run_Log written for that appointment only');
+  const conv = g.docs.DOCA.Conversations.map((c) => c.fields.Phone);
+  assert.deepStrictEqual(conv, [`+91${PATIENT}`, `+91${PATIENT2}`], 'inbox conversations belong to the PATIENTS');
+  assert.deepStrictEqual(rows(g, 'Messages').map((m) => [m.Direction, m.Template, m.Status, m.Sent_By.startsWith('W5-reminders (TEST_MODE: sent to +91' + TEST_PHONE + ')')]), [['Out', 'hello_world', 'queued', true], ['Out', 'hello_world', 'queued', true]]);
+  assert(r.runData["W5 – Call 'W12 - WhatsApp send'"].every((x) => x.json.inbox_logged === true));
+  ok('inbox: each reminder is logged to the patient\'s conversation and marked as sent to TEST_PHONE by TEST_MODE');
+
+  // TEST_MODE off: the recipient is the patient (decision.to), W12 still needs the allowlist.
+  const live = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, g: grist({ leads, appts, set: { TEST_MODE: 'false' } }) });
+  assert.strictEqual(live.r.error, null, JSON.stringify(live.r.error));
+  assert.deepStrictEqual(toMeta(live.meta), [`91${PATIENT}`, `91${PATIENT2}`]);
+  const blocked = run('W5 – Every 15 minutes', [{ json: {} }], { g: grist({ leads, appts, set: { TEST_MODE: 'false' } }) });   // allowlist = TEST_PHONE only
+  assert.strictEqual(blocked.meta.calls.length, 0);
+  assert(blocked.r.runData["W5 – Call 'W12 - WhatsApp send'"].every((x) => x.json.sent === false && /not in the W12 allowlist/.test(x.json.send_error)));
+  assert.deepStrictEqual(rows(blocked.g, 'Appointments').map((x) => x.R24_Sent), [undefined, undefined], 'blocked: flag stays unset');
+  ok('TEST_MODE=false: recipient = patient from the guard decision; the W12 allowlist still blocks everyone not on it');
+
+  const missing = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, g: grist({ leads, appts, set: { TEST_MODE: undefined } }) });
+  assert.deepStrictEqual(toMeta(missing.meta), [`91${TEST_PHONE}`, `91${TEST_PHONE}`]);
+  ok('TEST_MODE missing/empty: fails safe to ON (TEST_PHONE)');
+
+  const optOut = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, g: grist({ leads: [{ ...leads[0], fields: { ...leads[0].fields, Opted_Out: true } }, leads[1]], appts }) });
+  assert.deepStrictEqual(toMeta(optOut.meta), [`91${TEST_PHONE}`]);
+  assert.deepStrictEqual(rows(optOut.g, 'Appointments').map((x) => x.R24_Sent), [undefined, sec(NOW)]);
+  ok('Opted_Out patient: no send, no flag; the other reminder still goes');
+
+  const sent = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, g: grist({ leads, appts: [appt(1, 1, 23 * 60, { R24_Sent: sec(NOW) - 3600 }), appts[1]] }) });
+  assert.deepStrictEqual(toMeta(sent.meta), [`91${TEST_PHONE}`]);
+  ok('already-sent flag (R24_Sent): that reminder is skipped, no double message');
+
+  for (const [label, at, sends] of [['22:00', '2026-10-05T22:00:00+05:30', false], ['03:00', '2026-10-05T03:00:00+05:30', false], ['11:00', '2026-10-05T11:00:00+05:30', true]]) {
+    const t = Date.parse(at);
+    const q = run('W5 – Every 15 minutes', [{ json: {} }], { w: wide, now: t, g: grist({ leads, appts: [appt(1, 1, 23 * 60, {}, t), appt(2, 2, 22 * 60, {}, t)] }) });
+    assert.strictEqual(q.r.error, null);
+    assert.strictEqual(q.meta.calls.length, sends ? 2 : 0, `W5 at ${label}`);
+    if (!sends) assert(q.r.runData['W5 – Decide send'].every((d) => d.json.decision.reason === 'quiet hours'));
+  }
+  ok('W5 quiet hours: nothing is sent at 22:00 or 03:00 IST ("quiet hours" decision), 11:00 sends');
+
+  // The node itself, fed unsafe input: it must not turn "no" into "yes" or invent a recipient.
+  const feed = (decision, extra = {}) => run('W5 – Code in JavaScript', [{ json: { patient_name: 'A', patient_phone: `+91${PATIENT}`, doc_id: 'DOCA', wa_phone_number_id: '123456789012345', test_mode: 'false', ...extra, ...(decision === undefined ? {} : { decision }) } }], { w: wide });
+  const noDecision = feed(undefined);
+  assert.strictEqual(noDecision.r.runData['W5 – Code in JavaScript'][0].json.decision.send, false);
+  assert.strictEqual(noDecision.meta.calls.length, 0);
+  const no = feed({ send: false, to: null, reason: 'opted out', test_mode: false });
+  assert.deepStrictEqual(no.r.runData['W5 – Code in JavaScript'][0].json.decision, { send: false, to: null, reason: 'opted out', test_mode: false });
+  assert.strictEqual(no.meta.calls.length, 0);
+  const yes = { send: true, to: `+91${TEST_PHONE}`, reason: 'test mode: sent to TEST_PHONE', test_mode: true };
+  const through = feed(yes, { test_mode: 'TRUE' });
+  assert.deepStrictEqual(through.r.runData['W5 – Code in JavaScript'][0].json.decision, yes);
+  assert.deepStrictEqual(toMeta(through.meta), [`91${TEST_PHONE}`]);
+  ok('"W5 – Code in JavaScript": no decision -> no send; send:false stays false; a decision to TEST_PHONE reaches Meta unchanged');
 }
 
 // ================================================================ W6 -> W12 -> W6
@@ -158,11 +211,28 @@ console.log('W6 follow-ups (through the W12 engine)');
   assert.strictEqual(r.subRuns.length, 2);
   assert.deepStrictEqual(meta.calls.map((c) => [c.body.to, c.body.template.name]), [[`91${TEST_PHONE}`, 'hello_world'], [`91${TEST_PHONE}`, 'hello_world']]);
   assert.deepStrictEqual(rows(g, 'LEADS').map((x) => [x.Followup_Sent, x.Status]), [[true, 'New'], [true, 'Contacted'], [undefined, 'New']]);
-  assert.deepStrictEqual(rows(g, 'Run_Log').map((x) => x.Record), ['row 1 (followup)', 'row 2 (followup)'], 'ISSUE I-12: W6 reads Lead_ID, the column is Lead_id');
+  assert.deepStrictEqual(rows(g, 'Run_Log').map((x) => x.Record), ['row 1 (followup)', 'row 2 (followup)'], 'issue I-12 (not fixed): W6 reads Lead_ID, the column is Lead_id');
   const back = r.runData["W6 – Call 'W12 - WhatsApp send'"].map((x) => x.json);
-  assert(back.every((x) => x.sent === true && x.inbox_logged === false && /WhatsApp credential/.test(x.inbox_error)), 'ISSUE I-04: inbox nodes use the Meta credential');
-  assert.strictEqual(rows(g, 'Messages').length, 0);
-  ok('2 follow-ups -> W12 (TEST_PHONE) -> Followup_Sent + Run_Log; 10-day-old lead not marked Lost (mark_lost = false); inbox log fails (issue I-04)');
+  assert(back.every((x) => x.sent === true && x.inbox_logged === true && x.inbox_error === ''), 'FIX I-04: the inbox is written with the Grist credential');
+  assert.deepStrictEqual(g.docs.DOCA.Conversations.map((c) => [c.fields.Phone, c.fields.Lead]), [[`+91${PATIENT}`, 1], ['+919811111111', 2]]);
+  assert.deepStrictEqual(rows(g, 'Messages').map((m) => [m.Conversation, m.Direction, m.Template, m.Status]), [[1, 'Out', 'hello_world', 'queued'], [2, 'Out', 'hello_world', 'queued']]);
+  ok('FIX I-04: 2 follow-ups -> W12 (TEST_PHONE) -> Followup_Sent + Run_Log + inbox rows (Conversations + Messages); 10-day-old lead not marked Lost (mark_lost = false)');
+
+  const before = g.docs.DOCA.Conversations.length;
+  const again = simulate(wfWith(), { start: 'W12 – When called by another workflow', items: [{ json: { ...r.runData['W6 – Build Message'][0].json } }], grist: g, now: NOW, meta, workflowId: SELF });
+  assert.strictEqual(again.error, null, JSON.stringify(again.error));
+  assert.strictEqual(g.docs.DOCA.Conversations.length, before, 'the existing conversation is reused');
+  assert.strictEqual(rows(g, 'Messages').length, 3); assert.strictEqual(rows(g, 'Messages')[2].Conversation, 1);
+  ok('inbox: a second message to the same patient reuses the conversation (no duplicate)');
+
+  for (const [label, at, sends] of [['21:00', '2026-10-05T21:00:00+05:30', false], ['22:00', '2026-10-05T22:00:00+05:30', false], ['03:00', '2026-10-05T03:00:00+05:30', false], ['07:59', '2026-10-05T07:59:00+05:30', false], ['08:00', '2026-10-05T08:00:00+05:30', true], ['20:59', '2026-10-05T20:59:00+05:30', true]]) {
+    const q = run('W6 – Daily 10:00', [{ json: {} }], { g: grist({ leads }), now: Date.parse(at) });
+    assert.strictEqual(q.r.error, null);
+    assert.strictEqual(q.meta.calls.length, sends ? 2 : 0, `W6 at ${label}`);
+    assert.strictEqual(rows(q.g, 'LEADS').filter((x) => x.Followup_Sent).length, sends ? 2 : 0);
+    if (!sends) assert(q.r.runData['W6 – Decide send'].every((d) => d.json.decision.reason === 'quiet hours' && d.json.send === false), `${label}: not "quiet hours"`);
+  }
+  ok('FIX I-05: W6 quiet hours follow the real clock (07:59 / 21:00 / 22:00 / 03:00 blocked, 08:00 / 20:59 send)');
 }
 
 // ================================================================ W4
@@ -200,6 +270,35 @@ console.log('W11 error handler');
   assert.strictEqual(r.telegram.length, 1);
   assert(r.telegram[0].text.includes(`Workflow: ${merged.name}\nStep: W4 – Reject\nError: W4: bad signature`), r.telegram[0].text);
   ok('alert names the merged workflow and the failing node "W4 – Reject" (the prefix tells you the module)');
+}
+
+// ================================================================ W12 engine: real clock + guards, called directly
+console.log('W12 engine');
+{
+  const item = (over = {}) => ({ grist_base_url: 'http://grist:8484', doc_id: 'DOCA', source_workflow: 'engine-test', audience: 'staff', template: 'hello_world', template_params: {}, message_text: 't',
+    wa_phone_number_id: '123456789012345', decision: { send: true, to: `+91${TEST_PHONE}`, reason: 't', test_mode: true }, lead_phone: `+91${PATIENT}`, lead_row_id: 1, ...over });
+  const call = (it, now) => { const x = run('W12 – When called by another workflow', [{ json: it }], { now }); return { ...x, out: x.r.runData['W12 – Return result'][0].json }; };
+  for (const [label, at, sends] of [['07:59', '2026-10-05T07:59:00+05:30', false], ['08:00', '2026-10-05T08:00:00+05:30', true], ['20:59', '2026-10-05T20:59:00+05:30', true], ['21:00', '2026-10-05T21:00:00+05:30', false], ['22:00', '2026-10-05T22:00:00+05:30', false], ['03:00', '2026-10-05T03:00:00+05:30', false]]) {
+    const { out, meta } = call(item(), Date.parse(at));
+    assert.strictEqual(out.sent, sends, `W12 at ${label}: ${out.send_error}`);
+    assert.strictEqual(meta.calls.length, sends ? 1 : 0);
+    if (!sends) { assert.strictEqual(out.send_status, 'blocked'); assert.match(out.send_error, /quiet hours/); }
+  }
+  ok('FIX I-03: W12\'s own quiet-hours check uses the real clock (blocked 21:00-07:59 IST, sends 08:00-20:59), independent of the caller');
+  const notAllowed = call(item({ decision: { send: true, to: '+919111111111', reason: 't', test_mode: false } }), NOW);
+  assert.strictEqual(notAllowed.out.sent, false); assert.match(notAllowed.out.send_error, /not in the W12 allowlist/); assert.strictEqual(notAllowed.meta.calls.length, 0);
+  const no = call(item({ decision: { send: false, to: null, reason: 'opted out', test_mode: false } }), NOW);
+  assert.strictEqual(no.out.send_status, 'not_requested'); assert.strictEqual(no.meta.calls.length, 0);
+  ok('W12 guards unchanged: not allowlisted -> blocked, caller said no -> not_requested; Meta never called');
+
+  const g = grist();
+  const p1 = run('W12 – When called by another workflow', [{ json: item({ audience: 'patient', message_text: 'hello' }) }], { g });
+  assert.strictEqual(p1.r.error, null, JSON.stringify(p1.r.error));
+  const o1 = p1.r.runData['W12 – Return result'][0].json;
+  assert(o1.sent === true && o1.inbox_logged === true && o1.inbox_error === '', JSON.stringify(o1));
+  assert.deepStrictEqual(g.docs.DOCA.Conversations.map((c) => c.fields), [{ Phone: `+91${PATIENT}`, Lead: 1 }]);
+  assert.deepStrictEqual(rows(g, 'Messages').map((m) => [m.Direction, m.Body, m.Template, m.WA_Message_ID, m.Status, m.Send]), [['Out', 'hello', 'hello_world', 'wamid.T1', 'queued', false]]);
+  ok('FIX I-04: patient message -> Conversations + Messages written with the Grist credential; the Meta call used only "WhatsApp Cloud API" (the simulator rejects any mix-up)');
 }
 
 // ================================================================ W12 manual test + independence

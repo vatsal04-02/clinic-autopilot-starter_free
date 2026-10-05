@@ -235,9 +235,13 @@ check('credentials referenced correctly (by id + name, none invented)', () => {
       const url = String(n.parameters.url);
       const cred = n.credentials.httpHeaderAuth.name;
       if (url.includes('graph.facebook.com') || url.includes('meta_url')) assert.strictEqual(cred, 'WhatsApp Cloud API', n.name);
-      else if (url.includes('/api/docs/') && cred !== 'Header Auth account 2') warn(`${n.name} calls Grist with the "${cred}" credential (as in the export — see ISSUES)`);
+      else if (url.includes('/api/docs/')) assert.strictEqual(cred, 'Header Auth account 2', `${n.name} calls Grist with the "${cred}" credential`);
+      else assert.notStrictEqual(cred, 'WhatsApp Cloud API', `${n.name} uses the WhatsApp credential for a non-Meta call`);
     }
   }
+  const meta = functional.filter((n) => (n.credentials || {}).httpHeaderAuth && n.credentials.httpHeaderAuth.name === 'WhatsApp Cloud API').map((n) => n.name);
+  assert.deepStrictEqual(meta, ['W12 – Meta send'], `the WhatsApp credential must be used by W12 – Meta send only, found: ${meta}`);
+  assert(functional.filter((n) => n.type === T.http && String(n.parameters.url).includes('graph.facebook.com') || (n.parameters.url === '={{ $json.prep.meta_url }}')).length === 1, 'more than one Meta HTTP node');
   assert.strictEqual(byName['W1 – Webhook'].credentials.httpHeaderAuth.name, 'Header Auth account');
   assert.strictEqual(byName['W11 – Telegram alert'].credentials.telegramApi.name, 'Telegram account');
   return Object.entries(used).map(([k, v]) => `${k} x${v}`).join(', ');
@@ -262,9 +266,31 @@ check('no secret or token values in the file (placeholders only)', () => {
   return 'cal_webhook_secret + allowlisted numbers are placeholders; no token patterns';
 });
 
+// 16 --------------------------------------------------------------
+check('the safety guards are intact (real clock everywhere, decision never rebuilt, TEST_MODE / allowlist settings unchanged)', () => {
+  for (const n of functional.filter((x) => x.type === T.code)) {
+    const code = n.parameters.jsCode || '';
+    assert(!/new Date\(\s*['"`]20\d\d-/.test(code), `${n.name} uses a fixed test date instead of the real clock`);
+  }
+  for (const m of ['W3', 'W5', 'W6']) assert(/now_ms:\s*Date\.now\(\)/.test(byName[`${m} – Decide send`].parameters.jsCode), `${m} – Decide send must use now_ms: Date.now()`);
+  assert(/waPrepare\(\s*input,\s*cfg,\s*Date\.now\(\),/.test(byName['W12 – Prepare request'].parameters.jsCode), 'W12 – Prepare request must call waPrepare with Date.now()');
+  for (const n of ['W12 – Prepare request', 'W5 – Decide send', 'W6 – Decide send', 'W3 – Decide send']) assert(/function inQuietHours[\s\S]*hourIST >= 21 \|\| hourIST < 8/.test(byName[n].parameters.jsCode), `${n}: the 21:00-08:00 IST rule changed`);
+  assert(!byName['W5 – Decide send'].executeOnce, 'W5 – Decide send is still Execute Once');
+  const w5 = byName['W5 – Code in JavaScript'];
+  assert.strictEqual(w5.parameters.mode, 'runOnceForEachItem');
+  assert(/decision\s*=\s*item\.decision\s*\|\|/.test(w5.parameters.jsCode) && /^\s*decision,\s*$/m.test(w5.parameters.jsCode), 'W5 – Code in JavaScript must pass the Decide send decision through');
+  assert(!/test_mode:\s*Boolean/.test(w5.parameters.jsCode) && !/decision\s*:\s*\{/.test(w5.parameters.jsCode), 'W5 – Code in JavaScript rebuilds the decision again');
+  const cfg = Object.fromEntries(byName['W12 – Config'].parameters.assignments.assignments.map((a) => [a.name, a.value]));
+  assert.strictEqual(cfg.w12_send_mode, 'allowlist', 'w12_send_mode must stay allowlist');
+  assert.strictEqual(cfg.w12_uncertain_counts_as_sent, true);
+  const prep = byName['W12 – Prepare request'].parameters.jsCode;
+  assert(/if \(mode === 'allowlist'\)[\s\S]*is not in the W12 allowlist/.test(prep) && /inQuietHours\(nowMs\)\) return stop\('blocked', 'quiet hours/.test(prep), 'W12 allowlist / quiet-hours guard changed');
+  return 'W3 / W5 / W6 / W12 use Date.now(); W5 passes the guard decision through; send_mode = allowlist';
+});
+
 // with --in: everything else is byte-for-byte what was exported -------------------------------
 if (IN) {
-  check('nothing else changed: every exported node and connection is present and identical apart from the merge changes', () => {
+  check('nothing else changed: every exported node and connection is present and identical apart from the merge changes and the 5 requested fixes', () => {
     const SKIP = new Set(['W4 – Config.cal_webhook_secret']);
     const files = fs.readdirSync(IN).filter((x) => x.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(IN, f), 'utf8')));
     // the private numbers come from the export itself (W12 Config allowlist), never from this file
@@ -272,6 +298,19 @@ if (IN) {
     const allow = ((w12.nodes.find((n) => n.name === 'Config').parameters.assignments || {}).assignments || []).find((x) => x.name === 'w12_allowlist');
     const phoneRes = String(allow ? allow.value : '').split(/[,;]+/).map((x) => x.replace(/\D/g, '')).filter((x) => x.length >= 10)
       .map((d) => { const t = d.slice(-10); return new RegExp(`(\\+?91[\\s-]?)?${t.slice(0, 5)}[\\s-]?${t.slice(5)}`, 'g'); });
+    // The only nodes allowed to differ from the exports (the five fixes, README section 3) and exactly how.
+    const CLOCK = "new Date('2026-10-05T10:00:00+05:30').getTime()";
+    const W5_NEW1 = "// The recipient and the send / no-send answer come ONLY from \"Decide send\" (Opted_Out, sent flag, quiet hours,\n// TEST_MODE -> TEST_PHONE). Never rebuild them here; W12 checks them again before calling Meta.\nconst decision = item.decision || { send: false, to: null, reason: 'W5: no decision from Decide send', test_mode: true };";
+    const W5_OLD1 = "const to = String(phone).replace(/\\D/g, '');\n\nconst send = Boolean(item.send !== false);";
+    const W5_OLD2 = "    decision: {\n      send,\n      to,\n      reason: 'W5 reminder',\n      test_mode: Boolean(item.test_mode),\n    },";
+    const UNDO = {
+      'W5 – Decide send': { props: { executeOnce: true } },
+      'W5 – Code in JavaScript': { params: (p) => { assert.strictEqual(p.mode, 'runOnceForEachItem'); delete p.mode; p.jsCode = p.jsCode.replace(W5_NEW1, W5_OLD1).replace('    decision,', W5_OLD2); } },
+      'W6 – Decide send': { params: (p) => { p.jsCode = p.jsCode.replace('now_ms: Date.now(),', `now_ms: ${CLOCK},`); } },
+      'W12 – Prepare request': { params: (p) => { p.jsCode = p.jsCode.replace('  Date.now(),\n', `  ${CLOCK},\n`); } },
+      'W12 – Find conversation': { grist: true }, 'W12 – Create conversation': { grist: true }, 'W12 – Add message': { grist: true },
+    };
+    const seenFix = new Set();
     let count = 0;
     for (const src of files) {
       const m = (String(src.name).match(/^(W\d+)\b/) || [])[1];
@@ -281,8 +320,15 @@ if (IN) {
         const got = byName[map[n.name]];
         assert(got, `${map[n.name]} missing`);
         assert.strictEqual(got.id, n.id, `${got.name} id changed`);
+        const u = UNDO[got.name];
+        const view = { ...got, ...((u && u.props) || {}) };
+        if (u && u.grist) {
+          assert.deepStrictEqual(got.credentials, { httpHeaderAuth: byName['W5 – Clinics'].credentials.httpHeaderAuth }, `${got.name} must use the Grist credential`);
+          assert.notDeepStrictEqual(got.credentials, n.credentials, `${got.name}: expected the fix to differ from the export`);
+          view.credentials = n.credentials;
+        }
         for (const k of ['type', 'typeVersion', 'credentials', 'webhookId', 'disabled', 'executeOnce', 'alwaysOutputData', 'retryOnFail', 'maxTries', 'waitBetweenTries', 'onError', 'notes']) {
-          assert.deepStrictEqual(got[k], n[k], `${got.name}.${k} changed`);
+          assert.deepStrictEqual(view[k], n[k], `${got.name}.${k} changed`);
         }
         // parameters: equal once the renamed references are mapped back and the merge-only edits are undone
         const back = JSON.parse(JSON.stringify(got.parameters));
@@ -290,6 +336,10 @@ if (IN) {
         for (const [o, nn] of Object.entries(map).sort((x, y) => y[1].length - x[1].length)) s = s.split(nn.replace(/"/g, '\\"')).join(o.replace(/"/g, '\\"'));
         const p = JSON.parse(s);
         const orig = JSON.parse(JSON.stringify(n.parameters));
+        if (u) {
+          seenFix.add(got.name);
+          if (u.params) { const before = JSON.stringify(p); u.params(p); assert.notStrictEqual(JSON.stringify(p), before, `${got.name}: the fix was not found`); }
+        }
         if (n.type === T.exec) { delete p.workflowId; delete orig.workflowId; }
         if (p.assignments) for (const a of p.assignments.assignments) if (SKIP.has(`${got.name}.${a.name}`)) { a.value = null; const o = orig.assignments.assignments.find((x) => x.name === a.name); o.value = null; }
         const ps = JSON.stringify(p).replace(/PASTE_YOUR_TEST_NUMBER/g, 'PHONE');
@@ -304,7 +354,8 @@ if (IN) {
         assert.deepStrictEqual(mine, expect, `connections of ${map[srcName]} changed`);
       }
     }
-    return `${count} exported nodes identical (ids, types, versions, credentials, settings, parameters, connections)`;
+    assert.deepStrictEqual([...seenFix].sort(), Object.keys(UNDO).sort(), 'a fixed node was not found in the exports');
+    return `${count - seenFix.size} exported nodes identical; ${seenFix.size} differ ONLY by the 5 fixes (${[...seenFix].join(', ')}); all ids, connections and credentials of the rest identical`;
   });
 }
 
