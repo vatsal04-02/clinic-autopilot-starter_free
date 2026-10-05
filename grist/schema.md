@@ -64,6 +64,7 @@ How the workflows read the values:
 - `working_days`: `Mon-Sat`, `Mon,Tue,Thu` or `daily`. Missing or unreadable = every day.
 - `owner_phone`, `TEST_PHONE`: one Indian mobile number in any common format (`98765 43210`, `+91 98765 43210`); the workflows turn it into `+91XXXXXXXXXX`.
 - `TEST_MODE`: `true` or `false`. A missing row, or anything else, counts as ON (patient messages go to `TEST_PHONE`).
+- `booking_link`: the full link patients use to book (e.g. the clinic's Cal.com page); W6 adds it to follow-up messages.
 
 ### Run_Log
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime)

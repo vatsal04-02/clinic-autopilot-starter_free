@@ -7,6 +7,7 @@ const COLUMNS = {
   Run_Log: ['Workflow', 'Record', 'Outcome', 'Error', 'At'],
   Clinics: ['Clinic_Slug', 'Clinic_Name', 'Grist_Doc_ID', 'WA_Phone_Number_ID', 'Active'],
   Settings: ['Key', 'Value'],
+  Conversations: ['Lead', 'Phone', 'Last_Inbound_At', 'Unread', 'Automation_Paused', 'Assigned_To'],
 };
 const CHOICES = {
   'Leads.Source': ['Website', 'WhatsApp', 'Instagram', 'Call', 'Walk-in', 'Referral'],
@@ -15,8 +16,8 @@ const CHOICES = {
   'Appointments.Status': ['Booked', 'Rescheduled', 'Cancelled', 'Completed', 'No-show'],
   'Run_Log.Outcome': ['ok', 'skipped', 'failed'],
 };
-const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At']);
-const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active']);
+const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At']);
+const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused']);
 
 class FakeGrist {
   constructor(docs = {}) { this.docs = docs; this.nextId = {}; this.calls = []; }
