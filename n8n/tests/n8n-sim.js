@@ -1,6 +1,7 @@
 // Tiny n8n executor for the node types these workflows use, plus an in-memory fake Grist.
 // Purpose: run the SHIPPED workflow JSON end to end (wiring, expressions, branches, data flow).
-// Not n8n: no pairedItem resolution (".item" = same index), no retries, no credentials check beyond presence.
+// Not n8n: no pairedItem resolution (".item" = same index), no retries. Credentials: Meta (graph.facebook.com) must use
+// "WhatsApp Cloud API" and nothing else may, so a credential mix-up fails the test. opts.meta fakes the Meta API.
 const COLUMNS = {
   Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes'],
   Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent'],
@@ -8,6 +9,7 @@ const COLUMNS = {
   Clinics: ['Clinic_Slug', 'Clinic_Name', 'Grist_Doc_ID', 'WA_Phone_Number_ID', 'Active'],
   Settings: ['Key', 'Value'],
   Conversations: ['Lead', 'Phone', 'Last_Inbound_At', 'Unread', 'Automation_Paused', 'Assigned_To'],
+  Messages: ['Conversation', 'Direction', 'Body', 'Template', 'Sent_By', 'WA_Message_ID', 'Status', 'Send', 'Created_At'],
 };
 const CHOICES = {
   'Leads.Source': ['Website', 'WhatsApp', 'Instagram', 'Call', 'Walk-in', 'Referral'],
@@ -15,9 +17,11 @@ const CHOICES = {
   'Leads.Lost_Reason': ['No response', 'Price', 'Distance', 'Went elsewhere', 'Not a fit', 'Other'],
   'Appointments.Status': ['Booked', 'Rescheduled', 'Cancelled', 'Completed', 'No-show'],
   'Run_Log.Outcome': ['ok', 'skipped', 'failed'],
+  'Messages.Direction': ['In', 'Out'],
+  'Messages.Status': ['queued', 'needs_template', 'sent', 'delivered', 'read', 'failed'],
 };
-const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At']);
-const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused']);
+const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
+const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused', 'Messages.Send']);
 
 class FakeGrist {
   constructor(docs = {}) { this.docs = docs; this.nextId = {}; this.calls = []; }
@@ -127,6 +131,8 @@ function simulate(wf, opts) {
         case 'n8n-nodes-base.webhook':
         case 'n8n-nodes-base.scheduleTrigger':
         case 'n8n-nodes-base.errorTrigger':
+        case 'n8n-nodes-base.manualTrigger':
+        case 'n8n-nodes-base.executeWorkflowTrigger':
           outputs = [inputs]; break;
         case 'n8n-nodes-base.set': {
           outputs = [inputs.map((it, i) => {
@@ -164,15 +170,31 @@ function simulate(wf, opts) {
         }
         case 'n8n-nodes-base.httpRequest': {
           if (!node.credentials || !node.credentials.httpHeaderAuth) throw new Error(`HTTP ${name}: no credential`);
+          const credName = node.credentials.httpHeaderAuth.name;
+          const resp = ((p.options || {}).response || {}).response || {};
+          const continueOnFail = node.onError === 'continueRegularOutput';
           outputs = [inputs.map((it, i) => {
-            const ctx = ctxFor(it, i);
-            const method = resolve(p.method, ctx);
-            const url = resolve(p.url, ctx);
-            const query = {};
-            if (p.sendQuery) for (const q of p.queryParameters.parameters) query[q.name] = resolve(q.value, ctx);
-            let body;
-            if (p.sendBody) { body = resolve(p.jsonBody, ctx); if (typeof body === 'string') body = JSON.parse(body); }
-            return { json: grist.handle(method, url, query, body) };
+            try {
+              const ctx = ctxFor(it, i);
+              const method = resolve(p.method, ctx) || 'GET';
+              const url = resolve(p.url, ctx);
+              const query = {};
+              if (p.sendQuery) for (const q of p.queryParameters.parameters) query[q.name] = resolve(q.value, ctx);
+              let body;
+              if (p.sendBody) { body = resolve(p.jsonBody, ctx); if (typeof body === 'string') body = JSON.parse(body); }
+              if (/^https:\/\/graph\.facebook\.com\//.test(String(url))) {
+                if (credName !== 'WhatsApp Cloud API') throw new Error(`HTTP ${name}: Meta called with credential "${credName}"`);
+                if (!opts.meta) throw new Error('sim: no fake Meta (opts.meta)');
+                const r = opts.meta(method, url, body);   // { status, body } or throws (network error)
+                if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
+                return { json: resp.fullResponse ? { statusCode: r.status, statusMessage: '', headers: {}, body: r.body } : r.body };
+              }
+              if (credName === 'WhatsApp Cloud API') throw new Error(`HTTP ${name}: Grist called with the WhatsApp credential`);
+              return { json: grist.handle(method, url, query, body) };
+            } catch (e) {
+              if (continueOnFail) return { json: { error: { message: e.message } } };
+              throw e;
+            }
           })];
           break;
         }
