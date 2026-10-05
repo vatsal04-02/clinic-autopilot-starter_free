@@ -2,6 +2,8 @@
 // Purpose: run the SHIPPED workflow JSON end to end (wiring, expressions, branches, data flow).
 // Not n8n: no pairedItem resolution (".item" = same index), no retries. Credentials: Meta (graph.facebook.com) must use
 // "WhatsApp Cloud API" and nothing else may, so a credential mix-up fails the test. opts.meta fakes the Meta API.
+// Execute Workflow: only a call to the workflow itself (opts.workflowId, e.g. via {{ $workflow.id }}) is supported; it
+// runs from the Execute Workflow Trigger like n8n does, one sub-run per item in "each" mode (result.subRuns).
 const COLUMNS = {
   Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes'],
   Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent'],
@@ -88,7 +90,7 @@ class FakeGrist {
 }
 
 // ---- expressions
-const evalExpr = (src, ctx) => new Function('$json', '$', '$itemIndex', `return (${src});`)(ctx.$json, ctx.$, ctx.$itemIndex);
+const evalExpr = (src, ctx) => new Function('$json', '$', '$itemIndex', '$workflow', `return (${src});`)(ctx.$json, ctx.$, ctx.$itemIndex, ctx.$workflow);
 function resolve(val, ctx) {
   if (typeof val === 'string') {
     if (!val.startsWith('=')) return val;
@@ -108,7 +110,8 @@ function simulate(wf, opts) {
   if (now) Date.now = () => now;
   const byName = Object.fromEntries(wf.nodes.map((n) => [n.name, n]));
   const runData = {};
-  const result = { runData, error: null, telegram: [], visited: [] };
+  const result = { runData, error: null, telegram: [], visited: [], subRuns: [] };
+  const $workflow = { id: opts.workflowId, name: wf.name };
   const queue = [{ name: start, inputs: items }];
 
   const accessor = (name, idx) => {
@@ -119,13 +122,14 @@ function simulate(wf, opts) {
 
   try {
     while (queue.length) {
-      const { name, inputs } = queue.shift();
+      let { name, inputs } = queue.shift();
       const node = byName[name];
       result.visited.push(name);
       const p = node.parameters || {};
+      if (node.executeOnce) inputs = inputs.slice(0, 1);   // n8n setting "Execute Once": first item only
       let outputs; // array of item arrays, one per output index
 
-      const ctxFor = (item, i) => ({ $json: item ? item.json : undefined, $: (n) => accessor(n, i), $itemIndex: i });
+      const ctxFor = (item, i) => ({ $json: item ? item.json : undefined, $: (n) => accessor(n, i), $itemIndex: i, $workflow });
 
       switch (node.type) {
         case 'n8n-nodes-base.webhook':
@@ -144,10 +148,11 @@ function simulate(wf, opts) {
         }
         case 'n8n-nodes-base.code': {
           const staticFn = () => staticData;
-          if (p.mode === 'runOnceForAllItems') {
+          if (p.mode === 'runOnceForAllItems' || p.mode === undefined) {   // n8n's default mode is "all items"
             const $input = { all: () => inputs, first: () => inputs[0] };
-            const r = new Function('$', '$input', '$json', '$getWorkflowStaticData', p.jsCode)((n) => accessor(n, 0), $input, undefined, staticFn);
-            outputs = [r];
+            const first = inputs[0] ? inputs[0].json : undefined;           // n8n: $json = the first item here
+            const r = new Function('$', '$input', '$json', '$getWorkflowStaticData', p.jsCode)((n) => accessor(n, 0), $input, first, staticFn);
+            outputs = [Array.isArray(r) ? r : r ? [r] : []];
           } else {
             outputs = [inputs.map((it, i) => {
               const r = new Function('$json', '$', '$getWorkflowStaticData', p.jsCode)(it.json, (n) => accessor(n, i), staticFn);
@@ -211,6 +216,23 @@ function simulate(wf, opts) {
           break;
         }
         case 'n8n-nodes-base.stickyNote': outputs = [[]]; break;
+        case 'n8n-nodes-base.executeWorkflow': {
+          const id = resolve((p.workflowId || {}).value, ctxFor(inputs[0], 0));
+          if (!opts.workflowId || id !== opts.workflowId) throw new Error(`sim: ${name} calls workflow "${id}", only this workflow (${opts.workflowId}) is simulated`);
+          const trig = wf.nodes.filter((x) => x.type === 'n8n-nodes-base.executeWorkflowTrigger');
+          if (trig.length !== 1) throw new Error(`sim: expected one Execute Workflow Trigger, found ${trig.length}`);
+          const batches = p.mode === 'each' ? inputs.map((it) => [it]) : [inputs];
+          outputs = [[]];
+          for (const batch of batches) {
+            const sub = simulate(wf, { ...opts, start: trig[0].name, items: batch.map((it) => ({ json: JSON.parse(JSON.stringify(it.json)) })), now: Date.now() });
+            result.subRuns.push(sub);
+            result.telegram.push(...sub.telegram);
+            if (sub.error) throw new Error(`sub-workflow failed at ${sub.error.node}: ${sub.error.message}`);
+            const last = sub.visited[sub.visited.length - 1];   // n8n returns the last executed node's output
+            outputs[0].push(...(sub.runData[last] || []));
+          }
+          break;
+        }
         default: throw new Error(`sim: unsupported node type ${node.type} (${name})`);
       }
 
@@ -231,4 +253,4 @@ function simulate(wf, opts) {
   return result;
 }
 
-module.exports = { simulate, FakeGrist, COLUMNS, CHOICES };
+module.exports = { simulate, FakeGrist, COLUMNS, CHOICES, DATETIME, TOGGLE };
