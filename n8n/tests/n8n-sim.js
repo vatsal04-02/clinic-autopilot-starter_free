@@ -4,6 +4,8 @@
 // "WhatsApp Cloud API" and nothing else may, so a credential mix-up fails the test. opts.meta fakes the Meta API.
 // Execute Workflow: only a call to the workflow itself (opts.workflowId, e.g. via {{ $workflow.id }}) is supported; it
 // runs from the Execute Workflow Trigger like n8n does, one sub-run per item in "each" mode (result.subRuns).
+// Also: Respond to Webhook (recorded in result.responses, items pass through), Loop Over Items (splitInBatches v3: output 0 =
+// done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
   Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes'],
   Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent'],
@@ -110,7 +112,9 @@ function simulate(wf, opts) {
   if (now) Date.now = () => now;
   const byName = Object.fromEntries(wf.nodes.map((n) => [n.name, n]));
   const runData = {};
-  const result = { runData, error: null, telegram: [], visited: [], subRuns: [] };
+  const result = { runData, error: null, telegram: [], visited: [], subRuns: [], responses: [] };
+  const loops = {};          // splitInBatches state per node: { rest, done }
+  let steps = 0;
   const $workflow = { id: opts.workflowId, name: wf.name };
   const queue = [{ name: start, inputs: items }];
 
@@ -123,6 +127,7 @@ function simulate(wf, opts) {
   try {
     while (queue.length) {
       let { name, inputs } = queue.shift();
+      if (++steps > 20000) throw new Error('sim: more than 20000 node runs (endless loop?)');
       const node = byName[name];
       result.visited.push(name);
       const p = node.parameters || {};
@@ -178,7 +183,9 @@ function simulate(wf, opts) {
           const credName = node.credentials.httpHeaderAuth.name;
           const resp = ((p.options || {}).response || {}).response || {};
           const continueOnFail = node.onError === 'continueRegularOutput';
-          outputs = [inputs.map((it, i) => {
+          const errorOutput = node.onError === 'continueErrorOutput';   // second output carries the failed items
+          const failed = [];
+          const okItems = inputs.map((it, i) => {
             try {
               const ctx = ctxFor(it, i);
               const method = resolve(p.method, ctx) || 'GET';
@@ -197,10 +204,12 @@ function simulate(wf, opts) {
               if (credName === 'WhatsApp Cloud API') throw new Error(`HTTP ${name}: Grist called with the WhatsApp credential`);
               return { json: grist.handle(method, url, query, body) };
             } catch (e) {
+              if (errorOutput) { failed.push({ json: { error: { message: e.message } } }); return null; }
               if (continueOnFail) return { json: { error: { message: e.message } } };
               throw e;
             }
-          })];
+          }).filter(Boolean);
+          outputs = errorOutput ? [okItems, failed] : [okItems];
           break;
         }
         case 'n8n-nodes-base.stopAndError': {
@@ -216,6 +225,30 @@ function simulate(wf, opts) {
           break;
         }
         case 'n8n-nodes-base.stickyNote': outputs = [[]]; break;
+        case 'n8n-nodes-base.respondToWebhook': {
+          inputs.forEach((it, i) => {
+            const ctx = ctxFor(it, i);
+            const o = p.options || {};
+            result.responses.push({
+              node: name,
+              code: Number(o.responseCode === undefined ? 200 : resolve(o.responseCode, ctx)),
+              type: p.respondWith,
+              body: p.responseBody === undefined ? '' : resolve(p.responseBody, ctx),
+              headers: Object.fromEntries((((o.responseHeaders || {}).entries) || []).map((h) => [h.name, h.value])),
+            });
+          });
+          outputs = [inputs];   // n8n passes the items on; the run continues after the response
+          break;
+        }
+        case 'n8n-nodes-base.splitInBatches': {
+          const size = Number(resolve(p.batchSize, ctxFor(inputs[0], 0))) || 1;
+          let st = loops[name];
+          if (!st) st = loops[name] = { rest: inputs.slice(), done: [] };   // first arrival: all the items
+          else st.done.push(...inputs);                                      // loop-back: the finished batch
+          if (st.rest.length) outputs = [[], st.rest.splice(0, size)];       // next batch -> output 1 (loop)
+          else { outputs = [st.done, []]; delete loops[name]; }              // nothing left -> output 0 (done)
+          break;
+        }
         case 'n8n-nodes-base.executeWorkflow': {
           const id = resolve((p.workflowId || {}).value, ctxFor(inputs[0], 0));
           if (!opts.workflowId || id !== opts.workflowId) throw new Error(`sim: ${name} calls workflow "${id}", only this workflow (${opts.workflowId}) is simulated`);
@@ -236,7 +269,8 @@ function simulate(wf, opts) {
         default: throw new Error(`sim: unsupported node type ${node.type} (${name})`);
       }
 
-      runData[name] = outputs[0] || [];
+      // Loop Over Items: `$('Loop').item` is the batch being processed (output 1), not the (empty) done output
+      runData[name] = (node.type === 'n8n-nodes-base.splitInBatches' && outputs[1] && outputs[1].length ? outputs[1] : outputs[0]) || [];
       const conns = (wf.connections[name] || { main: [] }).main;
       outputs.forEach((out, oi) => {
         if (!out || !out.length) return;

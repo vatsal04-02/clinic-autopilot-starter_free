@@ -9,6 +9,7 @@ const files = [
   ...fs.readdirSync(__dirname).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(__dirname, f)),
   path.join(root, 'merged', 'validate-merged.js'),
   ...fs.readdirSync(path.join(root, 'merged')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'merged', f)),
+  ...fs.readdirSync(path.join(root, 'w2')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'w2', f)),
 ];
 
 for (const file of files) {
