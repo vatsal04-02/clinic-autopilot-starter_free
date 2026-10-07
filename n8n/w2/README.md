@@ -1,7 +1,8 @@
 # W2 — WhatsApp Inbound (standalone workflow)
 
 Meta WhatsApp Cloud API → n8n → the clinic's Grist CRM (lead, conversation, message).
-**Not connected to any other workflow, not merged into the master, sends nothing to WhatsApp.**
+**Not merged into the master, sends nothing to WhatsApp.** Its one link to another workflow (added with W13, section 13): after a
+message is stored it starts **W13 – AI receptionist** for that message, without waiting. Off until you set `W2 – Config` > `ai_workflow_id`.
 
 > **Status: built and simulated, NOT production-ready.** All checks below ran in a simulator with a fake Grist. It has not run in your n8n or received a real Meta message. Do not treat it as production-ready until the manual tests in section 8 pass in your n8n.
 
@@ -10,7 +11,7 @@ Meta WhatsApp Cloud API → n8n → the clinic's Grist CRM (lead, conversation, 
 | `W2-WhatsApp-Inbound.json` | **The workflow to import.** |
 | `build-w2.js` | Rebuilds that JSON from `code/*.js`: `node n8n/w2/build-w2.js` |
 | `code/*.js` | The 18 Code nodes' sources, one file each. `normalize-phone.js` gets W12's function pasted in at build time. |
-| `w2.test.js` | 29 check groups + 13 mutation tests: `node n8n/w2/w2.test.js` |
+| `w2.test.js` | 31 check groups + 15 mutation tests: `node n8n/w2/w2.test.js` |
 | `fixtures/*.sample.json` | Three FAKE Meta payloads (text, image, delivery receipt) to paste or `curl`. |
 
 Files outside `n8n/w2/` that changed: `n8n/tests/n8n-sim.js` (test simulator: added Respond to Webhook, Loop Over Items and HTTP error-output support; backward compatible) and `n8n/tests/run-all.js` (lists the W2 test). **No workflow file was touched**: not the master (`n8n/merged/`), not anything in `n8n/workflows/`.
@@ -21,7 +22,7 @@ Files outside `n8n/w2/` that changed: `n8n/tests/n8n-sim.js` (test simulator: ad
 
 | | |
 |---|---|
-| **Nodes** | 58 = 50 working nodes + 8 section notes. The 50: 2 webhooks, 1 manual trigger, 2 Set, 18 Code, 11 IF, 3 Respond to Webhook, 1 Loop Over Items, 12 HTTP (Grist). |
+| **Nodes** | 61 = 53 working nodes + 8 section notes. The 53: 2 webhooks, 1 manual trigger, 2 Set, 19 Code, 12 IF, 3 Respond to Webhook, 1 Loop Over Items, 12 HTTP (Grist), 1 Execute Workflow (W13, section 13). |
 | **Trigger paths** | `GET /webhook/whatsapp-inbound` (Meta verification) · `POST /webhook/whatsapp-inbound` (Meta events) · `W2 – Manual Test` (editor button). Test URLs use `/webhook-test/…`. |
 | **Credentials** | Only the existing Grist **Header Auth account 2** (id `9J6XxrIQoFDcQZ0Y`), by reference. No Meta token, no Telegram, nothing new. |
 | **Placeholder you must fill** | `W2 – Verify Config` → `meta_verify_token` = `PASTE_META_WEBHOOK_VERIFY_TOKEN`. Choose any string, paste the same one into Meta (section 9). |
@@ -167,3 +168,14 @@ curl -i -X POST "https://<your-n8n-host>/webhook-test/whatsapp-inbound" -H "Cont
 ## 12. Merging later
 
 Nothing here has to change to merge: copy the 50 working nodes into the master canvas (names already start with `W2 –`, which is the master's naming rule), keep the two webhooks on `whatsapp-inbound` (GET and POST), connect the staff-alert payload to a guard + W12 call as in section 7, and drop `W2 – Manual Test` / `W2 – Test Cases` if you do not want them in production. Re-run `n8n/merged/validate-merged.js` and a new simulated pass at that point.
+
+## 13. Hand-off to W13 (AI receptionist)
+
+Added with W13 (`n8n/w13/`). Three nodes after `W2 – Prepare Staff Alert`:
+
+- `W2 – AI Wanted?`: only a message that was **stored** (not a duplicate, not a failure), **not** from the manual test's fake data, and only when `W2 – Config` > `ai_workflow_id` holds a real workflow id. The shipped placeholder `PASTE_W13_WORKFLOW_ID` keeps the hand-off off, so W2 behaves exactly as before.
+- `W2 – Hand To AI`: Execute Workflow, one run per message, **"wait for sub-workflow" off**. Meta already has its 200; W2 does not wait for the AI and goes on to the next message.
+- `W2 – AI Handed`: if starting W13 failed (wrong id, W13 not saved), the message is still stored, Run_Log stays `ok` and its Error column says `AI hand-off failed: …`.
+
+To switch it on: import and save W13, copy its id from the URL (`…/workflow/<id>`), paste it into `W2 – Config` > `ai_workflow_id`, save W2. Then the clinic decides in its Grist Settings (`ai_mode`, see `n8n/w13/README.md`).
+

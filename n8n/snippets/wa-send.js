@@ -17,7 +17,12 @@ const WA_TEMPLATES = {
   followup_day2: { params: ['name', 'clinic_name', 'booking_link'] },
   new_lead_staff_alert: { params: ['clinic_name', 'lead_name', 'lead_phone', { key: 'enquiry', fallback: '(no message)' }] },
   lead_escalation: { params: ['clinic_name', 'lead_name', 'lead_phone', 'waiting_minutes'] },
+  human_handoff_alert: { params: ['clinic_name', 'lead_name', 'lead_phone', { key: 'reason', fallback: '(see the Grist inbox)' }] },
 };
+
+// Free-text replies (message_type 'text', from W13) are only allowed inside WhatsApp's 24-hour customer-service
+// window, i.e. within 24 h of the patient's last message (last_inbound_at). A 5-minute margin keeps clock drift safe.
+const WA_TEXT_WINDOW_MS = 24 * 3600 * 1000 - 5 * 60 * 1000;
 
 // Short hints for the Meta error codes we are most likely to meet (shown in send_error).
 const WA_HINTS = {
@@ -62,16 +67,27 @@ function waPrepare(input, cfg, nowMs, h) {
   if (!/^v\d+\.\d+$/.test(version)) return stop('invalid', 'graph_api_version is not set in the W12 Config node (e.g. v23.0 - copy it from Meta API Setup)');
   const phoneId = String(input.wa_phone_number_id || '').trim();
   if (!/^\d{5,25}$/.test(phoneId)) return stop('invalid', 'wa_phone_number_id is missing or not a number (Agency Registry > Clinics > WA_Phone_Number_ID)');
-  const tpl = WA_TEMPLATES[input.template];
-  if (!tpl) return stop('invalid', `unknown template "${input.template}" - add it to WA_TEMPLATES in W12`);
-  const values = input.template_params || {};
+  const isText = input.message_type === 'text';
+  let tpl = null;
+  let textBody = '';
   const params = [];
-  for (const spec of tpl.params) {
-    const key = typeof spec === 'string' ? spec : spec.key;
-    let v = waCleanParam(values[key]);
-    if (!v && typeof spec === 'object') v = spec.fallback;
-    if (!v) return stop('invalid', `template ${input.template}: variable "${key}" is empty`);
-    params.push(v);
+  if (isText) {
+    textBody = String(input.text_body === null || input.text_body === undefined ? '' : input.text_body).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, 4096);
+    if (!textBody) return stop('invalid', 'text message: text_body is empty');
+    const last = Number(input.last_inbound_at);
+    if (!Number.isFinite(last) || last <= 0) return stop('invalid', 'text message: last_inbound_at (the patient\'s last message, epoch seconds) is missing');
+    if (nowMs - last * 1000 > WA_TEXT_WINDOW_MS) return stop('blocked', 'outside the 24-hour WhatsApp window: only an approved template may be sent');
+  } else {
+    tpl = WA_TEMPLATES[input.template];
+    if (!tpl) return stop('invalid', `unknown template "${input.template}" - add it to WA_TEMPLATES in W12`);
+    const values = input.template_params || {};
+    for (const spec of tpl.params) {
+      const key = typeof spec === 'string' ? spec : spec.key;
+      let v = waCleanParam(values[key]);
+      if (!v && typeof spec === 'object') v = spec.fallback;
+      if (!v) return stop('invalid', `template ${input.template}: variable "${key}" is empty`);
+      params.push(v);
+    }
   }
 
   // 2. May it go out now, to this number?
@@ -81,6 +97,16 @@ function waPrepare(input, cfg, nowMs, h) {
   }
   if (h.inQuietHours(nowMs)) return stop('blocked', 'quiet hours (21:00-08:00 IST)');
 
+  if (isText) {
+    return {
+      call_meta: true,
+      send_status: 'pending',
+      send_error: '',
+      to,
+      meta_url: `https://graph.facebook.com/${version}/${phoneId}/messages`,
+      meta_request: { messaging_product: 'whatsapp', recipient_type: 'individual', to: to.slice(1), type: 'text', text: { preview_url: /https?:\/\//i.test(textBody), body: textBody } },
+    };
+  }
   const template = { name: input.template, language: { code: String(input.template_language || tpl.language || cfg.default_language || 'en') } };
   if (params.length) template.components = [{ type: 'body', parameters: params.map((text) => ({ type: 'text', text })) }];
   return {
@@ -153,8 +179,8 @@ function waInboxRow(input, res, nowSec) {
   const via = d.test_mode ? ` (TEST_MODE: sent to ${d.to})` : '';
   return {
     Direction: 'Out',
-    Body: String(input.message_text || `[template ${input.template}]`).slice(0, 2000),
-    Template: String(input.template || ''),
+    Body: String(input.message_text || input.text_body || `[template ${input.template}]`).slice(0, 2000),
+    Template: input.message_type === 'text' ? '' : String(input.template || ''),
     Sent_By: `${input.source_workflow || 'W12'}${via}`.slice(0, 200),
     WA_Message_ID: res.wa_message_id || '',
     Status: res.send_status === 'rejected' ? 'failed' : 'queued',
@@ -163,4 +189,4 @@ function waInboxRow(input, res, nowSec) {
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { WA_TEMPLATES, WA_HINTS, waCleanParam, waPrepare, waClassify, waInboxPlan, waInboxRow };
+if (typeof module !== 'undefined') module.exports = { WA_TEMPLATES, WA_HINTS, WA_TEXT_WINDOW_MS, waCleanParam, waPrepare, waClassify, waInboxPlan, waInboxRow };

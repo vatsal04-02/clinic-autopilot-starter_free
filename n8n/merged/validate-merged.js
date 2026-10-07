@@ -290,7 +290,7 @@ check('the safety guards are intact (real clock everywhere, decision never rebui
 
 // with --in: everything else is byte-for-byte what was exported -------------------------------
 if (IN) {
-  check('nothing else changed: every exported node and connection is present and identical apart from the merge changes and the 5 requested fixes', () => {
+  check('nothing else changed: every exported node and connection is present and identical apart from the merge changes, the 5 requested fixes and A-01', () => {
     const SKIP = new Set(['W4 – Config.cal_webhook_secret']);
     const files = fs.readdirSync(IN).filter((x) => x.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(path.join(IN, f), 'utf8')));
     // the private numbers come from the export itself (W12 Config allowlist), never from this file
@@ -303,11 +303,22 @@ if (IN) {
     const W5_NEW1 = "// The recipient and the send / no-send answer come ONLY from \"Decide send\" (Opted_Out, sent flag, quiet hours,\n// TEST_MODE -> TEST_PHONE). Never rebuild them here; W12 checks them again before calling Meta.\nconst decision = item.decision || { send: false, to: null, reason: 'W5: no decision from Decide send', test_mode: true };";
     const W5_OLD1 = "const to = String(phone).replace(/\\D/g, '');\n\nconst send = Boolean(item.send !== false);";
     const W5_OLD2 = "    decision: {\n      send,\n      to,\n      reason: 'W5 reminder',\n      test_mode: Boolean(item.test_mode),\n    },";
+    // A-01: W12's pasted wa-send.js block must be EXACTLY n8n/snippets/wa-send.js; in the export it is the older version. Both sides
+    // get the block replaced by a marker, so the rest of the two nodes must still be identical to the export.
+    const WA = fs.readFileSync(path.join(__dirname, '..', 'snippets', 'wa-send.js'), 'utf8');
+    const WA_BLOCK = WA.slice(WA.indexOf('const WA_TEMPLATES'), WA.indexOf('if (typeof module'));
+    const waSendBack = (code) => { assert.strictEqual(code.split(WA_BLOCK).length, 2, 'W12 code does not embed n8n/snippets/wa-send.js exactly once'); return code.replace(WA_BLOCK, '<<wa-send.js>>'); };
+    const waSendMark = (o) => {
+      const c = o.jsCode; const start = c.indexOf('const WA_TEMPLATES'); const end = c.indexOf('\n}\n\n', c.indexOf('function waInboxRow', start)) + 4;
+      assert(start >= 0 && end > start, 'export: wa-send.js block not found');
+      o.jsCode = `${c.slice(0, start)}<<wa-send.js>>${c.slice(end)}`;
+    };
     const UNDO = {
       'W5 – Decide send': { props: { executeOnce: true } },
       'W5 – Code in JavaScript': { params: (p) => { assert.strictEqual(p.mode, 'runOnceForEachItem'); delete p.mode; p.jsCode = p.jsCode.replace(W5_NEW1, W5_OLD1).replace('    decision,', W5_OLD2); } },
       'W6 – Decide send': { params: (p) => { p.jsCode = p.jsCode.replace('now_ms: Date.now(),', `now_ms: ${CLOCK},`); } },
-      'W12 – Prepare request': { params: (p) => { p.jsCode = p.jsCode.replace('  Date.now(),\n', `  ${CLOCK},\n`); } },
+      'W12 – Prepare request': { params: (p) => { p.jsCode = waSendBack(p.jsCode).replace('  Date.now(),\n', `  ${CLOCK},\n`); }, orig: waSendMark },
+      'W12 – Read reply': { params: (p) => { p.jsCode = waSendBack(p.jsCode); }, orig: waSendMark },
       'W12 – Find conversation': { grist: true }, 'W12 – Create conversation': { grist: true }, 'W12 – Add message': { grist: true },
     };
     const seenFix = new Set();
@@ -339,6 +350,7 @@ if (IN) {
         if (u) {
           seenFix.add(got.name);
           if (u.params) { const before = JSON.stringify(p); u.params(p); assert.notStrictEqual(JSON.stringify(p), before, `${got.name}: the fix was not found`); }
+          if (u.orig) u.orig(orig);
         }
         if (n.type === T.exec) { delete p.workflowId; delete orig.workflowId; }
         if (p.assignments) for (const a of p.assignments.assignments) if (SKIP.has(`${got.name}.${a.name}`)) { a.value = null; const o = orig.assignments.assignments.find((x) => x.name === a.name); o.value = null; }
@@ -355,7 +367,7 @@ if (IN) {
       }
     }
     assert.deepStrictEqual([...seenFix].sort(), Object.keys(UNDO).sort(), 'a fixed node was not found in the exports');
-    return `${count - seenFix.size} exported nodes identical; ${seenFix.size} differ ONLY by the 5 fixes (${[...seenFix].join(', ')}); all ids, connections and credentials of the rest identical`;
+    return `${count - seenFix.size} exported nodes identical; ${seenFix.size} differ ONLY by the 5 fixes + A-01 (${[...seenFix].join(', ')}); all ids, connections and credentials of the rest identical`;
   });
 }
 

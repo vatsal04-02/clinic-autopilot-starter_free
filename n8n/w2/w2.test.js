@@ -105,9 +105,11 @@ test('structure: names, ids, connections, no dangling nodes, W2 only', (w) => {
   const seen = new Set(triggers); const q = [...triggers];
   while (q.length) for (const o of (w.connections[q.shift()] || { main: [] }).main) for (const c of o) if (!seen.has(c.node)) { seen.add(c.node); q.push(c.node); }
   assert.deepStrictEqual(functional.filter((x) => !seen.has(x.name)).map((x) => x.name), [], 'unreachable nodes');
-  assert(functional.length === 50, `expected 50 functional nodes, found ${functional.length}`);
-  // independence: no other workflow, no Meta call
-  assert(!w.nodes.some((x) => /executeWorkflow/i.test(x.type)), 'W2 must not call another workflow');
+  assert(functional.length === 53, `expected 53 functional nodes, found ${functional.length}`);
+  // independence: the only other workflow is W13 (fire and forget, id from Config), no Meta call
+  const calls = w.nodes.filter((x) => /executeWorkflow/i.test(x.type));
+  assert.deepStrictEqual(calls.map((x) => x.name), ['W2 – Hand To AI'], 'W2 calls only W13');
+  assert.deepStrictEqual([calls[0].parameters.workflowId.value, calls[0].parameters.mode, calls[0].parameters.options, calls[0].onError], ['={{ $json.ai_workflow_id }}', 'each', { waitForSubWorkflow: false }, 'continueRegularOutput']);
   const all = JSON.stringify(functional);
   assert(!/graph\.facebook\.com/.test(all), 'W2 must not call Meta');
   assert(!/\$\('(?!W2 – )/.test(all), 'a node refers to a node outside W2');
@@ -151,7 +153,7 @@ test('structure: phone normalisation is W12\'s function, verbatim', (w) => {
 });
 test('structure: Config follows the live schema (LEADS, In, count) and Grist ids', (w) => {
   const cfg = Object.fromEntries(node(w, 'W2 – Config').parameters.assignments.assignments.map((a) => [a.name, a.value]));
-  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', message_direction_in: 'In', message_status_in: 'Received', unread_mode: 'count', message_sent_by: 'Patient', default_lead_name: 'WhatsApp Lead' });
+  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', message_direction_in: 'In', message_status_in: 'Received', unread_mode: 'count', message_sent_by: 'Patient', default_lead_name: 'WhatsApp Lead', ai_workflow_id: 'PASTE_W13_WORKFLOW_ID' });
 });
 
 // ================================================================ Meta verification (GET)
@@ -475,6 +477,47 @@ test('manual test: a pasted Meta payload runs alone (PASTED_PAYLOAD)', (w) => {
   assert.strictEqual(g2.calls.length, 0);
 });
 
+// ================================================================ hand-off to W13 (AI receptionist)
+const W13_ID = 'W13TESTID0000001';
+const withAi = (w, id = W13_ID) => { const ww = clone(w); node(ww, 'W2 – Config').parameters.assignments.assignments.find((a) => a.name === 'ai_workflow_id').value = id; return ww; };
+const fakeW13 = (fail) => ({ name: 'W13 (fake)', nodes: [
+  { name: 'In', type: 'n8n-nodes-base.executeWorkflowTrigger', parameters: { inputSource: 'passthrough' } },
+  { name: 'Work', type: 'n8n-nodes-base.code', parameters: { jsCode: fail ? "throw new Error('W13 broke');" : 'return $input.all();' } },
+], connections: { In: { main: [[{ node: 'Work', type: 'main', index: 0 }]] } } });
+test('AI hand-off: every NEW stored message starts W13 once (no waiting) with the clinic, message and lead ids', (w) => {
+  const g = grist({ leads: [lead(1, '+919000000011')] });
+  const body = multi([textMsg(P1, 'wamid.AI1', 'How much?'), textMsg(P2, 'wamid.AI2', 'Hi'), textMsg(P1, 'wamid.AI1', 'How much?')], [{ profile: { name: 'A' }, wa_id: P1 }, { profile: { name: 'B' }, wa_id: P2 }]);
+  const r = simulate(withAi(w), { start: 'W2 – Webhook Inbound', items: hook(body), grist: g, now: NOW, workflowId: 'W2_TEST', workflows: { [W13_ID]: fakeW13() } });
+  clean(r);
+  assert.strictEqual(r.responses[0].code, 200);
+  const subs = r.subRuns.filter((x) => x.workflowId === W13_ID);
+  assert.deepStrictEqual(subs.map((x) => x.waited), [false, false]);
+  const got = subs.map((x) => x.runData.In[0].json);
+  assert.deepStrictEqual(got.map((j) => [j.wa_message_id, j.message_row_id, j.lead_row_id, j.conversation_id, j.wa_phone_number_id, j.msg_type, j.patient_phone, j.doc_id]), [
+    ['wamid.AI1', 1, 1, 1, PNID, 'text', '+919000000011', 'DOCA'],
+    ['wamid.AI2', 2, 2, 2, PNID, 'text', '+919000000012', 'DOCA'],
+  ]);
+  assert.deepStrictEqual(logs(g).map((x) => [x.Outcome, x.Error]), [['ok', ''], ['ok', ''], ['skipped', 'duplicate WA_Message_ID (Messages row 1); nothing was created']]);
+});
+test('AI hand-off: off with the placeholder id, never for the manual test, and a broken / missing W13 never stops W2', (w) => {
+  let g = grist();
+  let r = simulate(w, { start: 'W2 – Webhook Inbound', items: hook(metaMsg(textMsg(P1, 'wamid.OFF', 'hi'))), grist: g, now: NOW, workflowId: 'W2_TEST' });
+  clean(r);
+  assert.deepStrictEqual([r.subRuns.length, r.visited.includes('W2 – Hand To AI'), fields(g, 'Messages').length], [0, false, 1]);
+  g = grist({ leads: [lead(1, '+919000000011', { Name: 'W2 Test Existing' })], clinics: [clinic(1, 'demo-clinic', 'DOCA', '1319211304612019', 'TRUE')] });
+  r = simulate(withAi(w), { start: 'W2 – Manual Test', items: [{ json: {} }], grist: g, now: NOW, workflowId: 'W2_TEST', workflows: { [W13_ID]: fakeW13() } });
+  clean(r);
+  assert.strictEqual(r.subRuns.length, 0, 'fake test patients must never reach the AI');
+  for (const [ww, workflows, why] of [[withAi(w, 'NOSUCHWORKFLOW1'), {}, /AI hand-off failed: Workflow does not exist/], [withAi(w), { [W13_ID]: fakeW13(true) }, /^$/]]) {
+    g = grist();
+    r = simulate(ww, { start: 'W2 – Webhook Inbound', items: hook(multi([textMsg(P1, 'wamid.X1', 'a'), textMsg(P2, 'wamid.X2', 'b')], [])), grist: g, now: NOW, workflowId: 'W2_TEST', workflows });
+    clean(r);
+    assert.deepStrictEqual(fields(g, 'Messages').map((m) => m.WA_Message_ID), ['wamid.X1', 'wamid.X2']);
+    assert.deepStrictEqual(logs(g).map((x) => x.Outcome), ['ok', 'ok']);
+    for (const l of logs(g)) assert(why.test(l.Error), l.Error);
+  }
+});
+
 // ================================================================ the fixtures work as curl bodies
 test('fixtures: the sample payloads are accepted as they are', (w) => {
   for (const [f, status] of [['meta-inbound-text.sample.json', 200], ['meta-inbound-image.sample.json', 200], ['meta-status.sample.json', 200]]) {
@@ -513,6 +556,8 @@ if (!process.env.W2_NO_MUTATIONS) {
     'the placeholder token is accepted': (w) => code(w, 'W2 – Check Verify Token', "if (!want || want === PLACEHOLDER)", 'if (!want)'),
     'conversation flags are overwritten': (w) => code(w, 'W2 – Message Saved', 'Unread: unread }', 'Unread: unread, Automation_Paused: false }'),
     'failures are not logged': (w) => rewire(w, 'W2 – Add Message', 1, 'W2 – Loop Over Messages'),
+    'the manual test reaches the AI': (w) => { const n = node(w, 'W2 – AI Wanted?'); n.parameters.conditions.conditions[0].leftValue = n.parameters.conditions.conditions[0].leftValue.replace(' && !$json.test_case', ''); },
+    'duplicates reach the AI': (w) => rewire(w, 'W2 – Duplicate?', 0, 'W2 – Hand To AI'),
     'status events create messages': (w) => code(w, 'W2 – Parse Meta Event', "if (!Array.isArray(v.messages) || !v.messages.length) continue;", "if (!Array.isArray(v.messages)) v.messages = (v.statuses || []).map((s) => ({ from: s.recipient_id, id: s.id, type: 'text', text: { body: s.status } }));"),
   };
   let missed = 0;

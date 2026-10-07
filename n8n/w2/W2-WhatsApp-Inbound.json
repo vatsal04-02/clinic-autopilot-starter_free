@@ -239,6 +239,12 @@
               "name": "default_lead_name",
               "value": "WhatsApp Lead",
               "type": "string"
+            },
+            {
+              "id": "efa1c6a0-2915-46c9-af41-0ff162c54cc3",
+              "name": "ai_workflow_id",
+              "value": "PASTE_W13_WORKFLOW_ID",
+              "type": "string"
             }
           ]
         },
@@ -1137,16 +1143,94 @@
       "id": "30f418fe-b6a7-4f41-a802-0021daf72446"
     },
     {
-      "name": "W2 – Build Run Log",
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "name": "W2 – AI Wanted?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
       "position": [
         960,
         3872
       ],
       "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "e31eaa69-297f-4626-a48c-3d84216d29ee",
+              "leftValue": "={{ $json.run_outcome === 'ok' && !$json.test_case && /^[A-Za-z0-9]{8,32}$/.test(String($json.ai_workflow_id || '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "c1a22d52-239d-48a3-aa31-379af0490a29"
+    },
+    {
+      "name": "W2 – Hand To AI",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1200,
+        3696
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "={{ $json.ai_workflow_id }}",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "mode": "each",
+        "options": {
+          "waitForSubWorkflow": false
+        }
+      },
+      "id": "b9826a67-e565-47d6-ab28-b8a78caf0ec6"
+    },
+    {
+      "name": "W2 – AI Handed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        3696
+      ],
+      "parameters": {
         "mode": "runOnceForEachItem",
-        "jsCode": "// The one place that turns any outcome (stored, skipped, failed) into a Run_Log row.\n// Input is either (a) a full item with run_outcome / run_error, or (b) the error output of a Grist HTTP node ({ error }), in which case the\n// message's context is taken from the nearest earlier stage of THIS message. No phone numbers are written: numbers are masked.\nconst STAGES = ['W2 – Message Saved', 'W2 – Conversation Ready', 'W2 – Read Created Conversation', 'W2 – Read Conversation', 'W2 – Lead Ready',\n  'W2 – Read Created Lead', 'W2 – Read Lead', 'W2 – Read Duplicate', 'W2 – Normalize Phone', 'W2 – Resolve Clinic'];\nconst from = (name) => { try { return $(name).item.json; } catch (e) { return null; } };   // throws when that stage did not run for this message\nconst isFull = $json && $json.wa_message_id !== undefined;\nconst loop = from('W2 – Loop Over Messages');\nlet ctx = null;\nlet stage = '';\nif (isFull) ctx = $json;\nelse {\n  for (const s of STAGES) {\n    const c = from(s);\n    if (c && (!loop || c.wa_message_id === loop.wa_message_id)) { ctx = c; stage = s.replace('W2 – ', ''); break; }   // same message id = not left over from an earlier loop round\n  }\n  if (!ctx) ctx = loop || {};\n}\n\nconst safe = (v, max) => String(v === undefined || v === null ? '' : v).replace(/bearer\\s+\\S+/gi, 'bearer [hidden]').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst failedHttp = !isFull;\nconst outcome = failedHttp ? 'failed' : (ctx.run_outcome || 'ok');\nlet err;\nif (failedHttp) {\n  const e = $json && $json.error;\n  const msg = safe(e && typeof e === 'object' ? (e.message || e.description || JSON.stringify(e)) : e, 300) || 'unknown error';\n  err = `Grist request failed${stage ? ` after \"${stage}\"` : ''}: ${msg}`;\n} else if (outcome === 'ok' && Array.isArray(ctx.race_notes) && ctx.race_notes.length) err = ctx.race_notes.join('; ');\nelse err = ctx.run_error || '';\n\nconst mask = (p) => String(p || '').replace(/\\d(?=\\d{4})/g, '*');\nconst id = ctx.wa_message_id || '';\nconst record = !failedHttp && outcome === 'ok'\n  ? `${ctx.lead_id || 'lead'} ${id} (${ctx.lead_created ? 'new lead' : 'existing lead'}, ${ctx.msg_type || 'message'})`\n  : `${id} ${mask(ctx.patient_phone || ctx.from)}`.trim();\n\nreturn {\n  json: {\n    can_log: !!(ctx.grist_base_url && ctx.doc_id),                      // no clinic resolved = no CRM to log into\n    grist_base_url: ctx.grist_base_url,\n    doc_id: ctx.doc_id,\n    log: { Workflow: 'W2-WhatsApp-Inbound', Record: safe(record, 200), Outcome: outcome, Error: safe(err, 500), At: Math.floor(Date.now() / 1000) },\n    outcome,\n    wa_message_id: id,\n    lead_row_id: ctx.lead_row_id || 0,\n    conversation_id: ctx.conversation_id || 0,\n    message_row_id: ctx.message_row_id || 0,\n    staff_alert: ctx.staff_alert || null,\n    test_case: ctx.test_case,\n  },\n};\n"
+        "jsCode": "// W13 was started for this message (it runs on its own; W2 does not wait for it). If starting it failed (wrong ai_workflow_id,\n// W13 not saved), the message is still stored: the reason goes to Run_Log and nothing else changes.\nconst ctx = $('W2 – Prepare Staff Alert').item.json;\nconst e = $json && $json.error;\nreturn { json: { ...ctx, ai_note: e ? `AI hand-off failed: ${String(e.message || e).replace(/\\s+/g, ' ').slice(0, 200)}` : 'AI hand-off started' } };\n"
+      },
+      "id": "bc19d323-ba1b-4256-a4fe-d5e65a384408"
+    },
+    {
+      "name": "W2 – Build Run Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1680,
+        3872
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// The one place that turns any outcome (stored, skipped, failed) into a Run_Log row.\n// Input is either (a) a full item with run_outcome / run_error, or (b) the error output of a Grist HTTP node ({ error }), in which case the\n// message's context is taken from the nearest earlier stage of THIS message. No phone numbers are written: numbers are masked.\nconst STAGES = ['W2 – Message Saved', 'W2 – Conversation Ready', 'W2 – Read Created Conversation', 'W2 – Read Conversation', 'W2 – Lead Ready',\n  'W2 – Read Created Lead', 'W2 – Read Lead', 'W2 – Read Duplicate', 'W2 – Normalize Phone', 'W2 – Resolve Clinic'];\nconst from = (name) => { try { return $(name).item.json; } catch (e) { return null; } };   // throws when that stage did not run for this message\nconst isFull = $json && $json.wa_message_id !== undefined;\nconst loop = from('W2 – Loop Over Messages');\nlet ctx = null;\nlet stage = '';\nif (isFull) ctx = $json;\nelse {\n  for (const s of STAGES) {\n    const c = from(s);\n    if (c && (!loop || c.wa_message_id === loop.wa_message_id)) { ctx = c; stage = s.replace('W2 – ', ''); break; }   // same message id = not left over from an earlier loop round\n  }\n  if (!ctx) ctx = loop || {};\n}\n\nconst safe = (v, max) => String(v === undefined || v === null ? '' : v).replace(/bearer\\s+\\S+/gi, 'bearer [hidden]').replace(/\\s+/g, ' ').trim().slice(0, max);\nconst failedHttp = !isFull;\nconst outcome = failedHttp ? 'failed' : (ctx.run_outcome || 'ok');\nlet err;\nif (failedHttp) {\n  const e = $json && $json.error;\n  const msg = safe(e && typeof e === 'object' ? (e.message || e.description || JSON.stringify(e)) : e, 300) || 'unknown error';\n  err = `Grist request failed${stage ? ` after \"${stage}\"` : ''}: ${msg}`;\n} else if (outcome === 'ok' && Array.isArray(ctx.race_notes) && ctx.race_notes.length) err = ctx.race_notes.join('; ');\nelse err = ctx.run_error || '';\nif (/failed/.test(String(ctx.ai_note || ''))) err = [err, ctx.ai_note].filter(Boolean).join('; ');   // the message is stored; only the AI step failed\n\nconst mask = (p) => String(p || '').replace(/\\d(?=\\d{4})/g, '*');\nconst id = ctx.wa_message_id || '';\nconst record = !failedHttp && outcome === 'ok'\n  ? `${ctx.lead_id || 'lead'} ${id} (${ctx.lead_created ? 'new lead' : 'existing lead'}, ${ctx.msg_type || 'message'})`\n  : `${id} ${mask(ctx.patient_phone || ctx.from)}`.trim();\n\nreturn {\n  json: {\n    can_log: !!(ctx.grist_base_url && ctx.doc_id),                      // no clinic resolved = no CRM to log into\n    grist_base_url: ctx.grist_base_url,\n    doc_id: ctx.doc_id,\n    log: { Workflow: 'W2-WhatsApp-Inbound', Record: safe(record, 200), Outcome: outcome, Error: safe(err, 500), At: Math.floor(Date.now() / 1000) },\n    outcome,\n    wa_message_id: id,\n    lead_row_id: ctx.lead_row_id || 0,\n    conversation_id: ctx.conversation_id || 0,\n    message_row_id: ctx.message_row_id || 0,\n    staff_alert: ctx.staff_alert || null,\n    ai_handoff: ctx.ai_note || '',\n    test_case: ctx.test_case,\n  },\n};\n"
       },
       "id": "3c9a4033-3a01-4c84-a424-50fc6c0a3c22"
     },
@@ -1155,7 +1239,7 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        1200,
+        1920,
         3872
       ],
       "parameters": {
@@ -1189,7 +1273,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1440,
+        2160,
         3872
       ],
       "credentials": {
@@ -1324,7 +1408,7 @@
       "id": "91a028e5-c6c3-4c4d-afeb-a702f55b2b91"
     },
     {
-      "name": "W2 – Section Future",
+      "name": "W2 – Section G AI",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
@@ -1332,12 +1416,12 @@
         4260
       ],
       "parameters": {
-        "content": "## SECTION FUTURE — AFTER THE MERGE\nW12 (the one WhatsApp sender) is the only planned integration point: route the staff-alert payload through a guard node (owner phone, TEST_MODE, quiet hours) and \"Call W12\". Not done here on purpose.",
+        "content": "## SECTION G — AI RECEPTIONIST (W13)\nEvery stored patient message is handed to W13 (one run per message, W2 does not wait). W13 decides with Claude, writes the CRM and replies through W12. Off until W2 – Config > ai_workflow_id is set (and the clinic has Settings ai_mode). The new-lead staff-alert payload is still prepared only (not sent).",
         "width": 2500,
         "height": 260,
         "color": 7
       },
-      "id": "0ba834e2-8a9c-499a-ab3b-ac68e897c86c"
+      "id": "0522abe4-4d87-4c3d-acc1-bc6669afa711"
     }
   ],
   "pinData": {},
@@ -1968,6 +2052,46 @@
       ]
     },
     "W2 – Prepare Staff Alert": {
+      "main": [
+        [
+          {
+            "node": "W2 – AI Wanted?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "W2 – AI Wanted?": {
+      "main": [
+        [
+          {
+            "node": "W2 – Hand To AI",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "W2 – Build Run Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "W2 – Hand To AI": {
+      "main": [
+        [
+          {
+            "node": "W2 – AI Handed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "W2 – AI Handed": {
       "main": [
         [
           {

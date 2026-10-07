@@ -27,6 +27,7 @@ if (failedHttp) {
   err = `Grist request failed${stage ? ` after "${stage}"` : ''}: ${msg}`;
 } else if (outcome === 'ok' && Array.isArray(ctx.race_notes) && ctx.race_notes.length) err = ctx.race_notes.join('; ');
 else err = ctx.run_error || '';
+if (/failed/.test(String(ctx.ai_note || ''))) err = [err, ctx.ai_note].filter(Boolean).join('; ');   // the message is stored; only the AI step failed
 
 const mask = (p) => String(p || '').replace(/\d(?=\d{4})/g, '*');
 const id = ctx.wa_message_id || '';
@@ -46,6 +47,7 @@ return {
     conversation_id: ctx.conversation_id || 0,
     message_row_id: ctx.message_row_id || 0,
     staff_alert: ctx.staff_alert || null,
+    ai_handoff: ctx.ai_note || '',
     test_case: ctx.test_case,
   },
 };

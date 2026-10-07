@@ -2,18 +2,22 @@
 // Purpose: run the SHIPPED workflow JSON end to end (wiring, expressions, branches, data flow).
 // Not n8n: no pairedItem resolution (".item" = same index), no retries. Credentials: Meta (graph.facebook.com) must use
 // "WhatsApp Cloud API" and nothing else may, so a credential mix-up fails the test. opts.meta fakes the Meta API.
-// Execute Workflow: only a call to the workflow itself (opts.workflowId, e.g. via {{ $workflow.id }}) is supported; it
-// runs from the Execute Workflow Trigger like n8n does, one sub-run per item in "each" mode (result.subRuns).
+// Execute Workflow: a call to the workflow itself (opts.workflowId, e.g. via {{ $workflow.id }}) or to another workflow listed in
+// opts.workflows ({ id: workflow JSON }); it runs from that workflow's Execute Workflow Trigger like n8n does, one sub-run per
+// item in "each" mode (result.subRuns). "Wait for sub-workflow" off: the sub-run still happens (synchronously here), its
+// errors do not reach the caller, and the node passes its input items on. Unknown workflow id = error (n8n: workflow not found).
+// Claude: https://api.anthropic.com/ must use the "Anthropic API" credential and nothing else may; opts.anthropic fakes it.
 // Also: Respond to Webhook (recorded in result.responses, items pass through), Loop Over Items (splitInBatches v3: output 0 =
 // done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
-  Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes'],
+  Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes', 'Lead_Stage'],
   Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent'],
   Run_Log: ['Workflow', 'Record', 'Outcome', 'Error', 'At'],
   Clinics: ['Clinic_Slug', 'Clinic_Name', 'Grist_Doc_ID', 'WA_Phone_Number_ID', 'Active'],
   Settings: ['Key', 'Value'],
-  Conversations: ['Lead', 'Phone', 'Last_Inbound_At', 'Unread', 'Automation_Paused', 'Assigned_To'],
-  Messages: ['Conversation', 'Direction', 'Body', 'Template', 'Sent_By', 'WA_Message_ID', 'Status', 'Send', 'Created_At'],
+  Conversations: ['Lead', 'Phone', 'Last_Inbound_At', 'Unread', 'Automation_Paused', 'Assigned_To', 'Needs_Human', 'Handoff_Reason', 'Last_Intent'],
+  Messages: ['Conversation', 'Direction', 'Body', 'Template', 'Sent_By', 'WA_Message_ID', 'Status', 'Send', 'Created_At', 'Intent', 'AI_Action', 'AI_Confidence', 'AI_Status', 'Needs_Human', 'AI_Reply', 'AI_Reason'],
+  Knowledge: ['Title', 'Category', 'Content', 'Active'],
 };
 const CHOICES = {
   'Leads.Source': ['Website', 'WhatsApp', 'Instagram', 'Call', 'Walk-in', 'Referral'],
@@ -23,9 +27,13 @@ const CHOICES = {
   'Run_Log.Outcome': ['ok', 'skipped', 'failed'],
   'Messages.Direction': ['In', 'Out'],
   'Messages.Status': ['queued', 'needs_template', 'sent', 'delivered', 'read', 'failed'],
+  'Messages.AI_Status': ['processing', 'replied', 'drafted', 'handed_off', 'no_reply', 'skipped', 'opted_out', 'deferred', 'failed'],
+  'Leads.Lead_Stage': ['cold', 'warm', 'hot'],
+  'Knowledge.Category': ['services', 'pricing', 'hours', 'location', 'policy', 'faq', 'general'],
 };
 const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
-const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused', 'Messages.Send']);
+const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused', 'Messages.Send',
+  'Conversations.Needs_Human', 'Messages.Needs_Human', 'Knowledge.Active']);
 
 class FakeGrist {
   constructor(docs = {}) { this.docs = docs; this.nextId = {}; this.calls = []; }
@@ -201,6 +209,16 @@ function simulate(wf, opts) {
                 if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
                 return { json: resp.fullResponse ? { statusCode: r.status, statusMessage: '', headers: {}, body: r.body } : r.body };
               }
+              if (/^https:\/\/api\.anthropic\.com\//.test(String(url))) {
+                if (credName !== 'Anthropic API') throw new Error(`HTTP ${name}: Claude called with credential "${credName}"`);
+                if (!opts.anthropic) throw new Error('sim: no fake Claude (opts.anthropic)');
+                const headers = {};
+                if (p.sendHeaders) for (const hd of p.headerParameters.parameters) headers[hd.name] = resolve(hd.value, ctx);
+                const r = opts.anthropic(method, url, headers, body);   // { status, body } or throws (timeout / network)
+                if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
+                return { json: r.body };
+              }
+              if (credName === 'Anthropic API') throw new Error(`HTTP ${name}: the Anthropic credential used for ${url}`);
               if (credName === 'WhatsApp Cloud API') throw new Error(`HTTP ${name}: Grist called with the WhatsApp credential`);
               return { json: grist.handle(method, url, query, body) };
             } catch (e) {
@@ -250,19 +268,30 @@ function simulate(wf, opts) {
           break;
         }
         case 'n8n-nodes-base.executeWorkflow': {
-          const id = resolve((p.workflowId || {}).value, ctxFor(inputs[0], 0));
-          if (!opts.workflowId || id !== opts.workflowId) throw new Error(`sim: ${name} calls workflow "${id}", only this workflow (${opts.workflowId}) is simulated`);
-          const trig = wf.nodes.filter((x) => x.type === 'n8n-nodes-base.executeWorkflowTrigger');
-          if (trig.length !== 1) throw new Error(`sim: expected one Execute Workflow Trigger, found ${trig.length}`);
-          const batches = p.mode === 'each' ? inputs.map((it) => [it]) : [inputs];
-          outputs = [[]];
-          for (const batch of batches) {
-            const sub = simulate(wf, { ...opts, start: trig[0].name, items: batch.map((it) => ({ json: JSON.parse(JSON.stringify(it.json)) })), now: Date.now() });
-            result.subRuns.push(sub);
-            result.telegram.push(...sub.telegram);
-            if (sub.error) throw new Error(`sub-workflow failed at ${sub.error.node}: ${sub.error.message}`);
-            const last = sub.visited[sub.visited.length - 1];   // n8n returns the last executed node's output
-            outputs[0].push(...(sub.runData[last] || []));
+          const wait = (p.options || {}).waitForSubWorkflow !== false;
+          try {
+            const id = resolve((p.workflowId || {}).value, ctxFor(inputs[0], 0));
+            const target = opts.workflowId && id === opts.workflowId ? wf : (opts.workflows || {})[id];
+            if (!target) throw new Error(`Workflow does not exist: "${id}"`);
+            const trig = target.nodes.filter((x) => x.type === 'n8n-nodes-base.executeWorkflowTrigger');
+            if (trig.length !== 1) throw new Error(`sim: expected one Execute Workflow Trigger, found ${trig.length}`);
+            const batches = p.mode === 'each' ? inputs.map((it) => [it]) : [inputs];
+            outputs = [[]];
+            for (const batch of batches) {
+              const sub = simulate(target, { ...opts, workflowId: id, start: trig[0].name, items: batch.map((it) => ({ json: JSON.parse(JSON.stringify(it.json)) })), now: Date.now() });
+              sub.workflowId = id;
+              sub.waited = wait;
+              result.subRuns.push(sub);
+              result.telegram.push(...sub.telegram);
+              if (!wait) continue;                               // fire and forget: the caller never sees the sub-run
+              if (sub.error) throw new Error(`sub-workflow failed at ${sub.error.node}: ${sub.error.message}`);
+              const last = sub.visited[sub.visited.length - 1];   // n8n returns the last executed node's output
+              outputs[0].push(...(sub.runData[last] || []));
+            }
+            if (!wait) outputs = [inputs];
+          } catch (e) {
+            if (node.onError !== 'continueRegularOutput') throw e;
+            outputs = [[{ json: { error: { message: e.message } } }]];
           }
           break;
         }

@@ -3,8 +3,8 @@
 | File | What it is |
 |---|---|
 | `clinic-autopilot-single-workflow.json` | **The workflow to import.** It has 139 nodes: the 125 exported nodes (118 working nodes plus 7 of your own notes) and 14 section notes. |
-| `build-merged.js` | Rebuilds that file from your exports: `node n8n/merged/build-merged.js --in <folder with the W*.json exports>`. It applies the 5 fixes from section 3; `--no-fixes` builds the merge exactly as exported. |
-| `validate-merged.js` | Runs the 15 checks from section 7 plus 2 more (safety guards intact; nothing else changed). Add `--in <exports folder>` to prove that only the 7 fixed nodes differ from your exports. |
+| `build-merged.js` | Rebuilds that file from your exports: `node n8n/merged/build-merged.js --in <folder with the W*.json exports>`. It applies the 5 fixes from section 3 and the W13 change A-01 (section 5c); `--no-fixes` builds the merge exactly as exported. |
+| `validate-merged.js` | Runs the 15 checks from section 7 plus 2 more (safety guards intact; nothing else changed). Add `--in <exports folder>` to prove that only the 8 changed nodes differ from your exports. |
 | `merged.flow.test.js` | Runs the merged file end to end in the simulator, one trigger at a time, with a fake Grist and a fake Meta. |
 
 Run all checks with `node n8n/tests/run-all.js`. It stops on the first failure.
@@ -159,7 +159,21 @@ Exactly **7 nodes** differ from your exports. Node ids, connections, settings, w
 
 Quiet hours (21:00–08:00 IST) are enforced again in W3, W5, W6 **and** in W12 itself. So W12 refuses to send at night even when called by hand, and the manual test only works between 08:00 and 21:00 IST.
 
-**Nothing else changed.** `validate-merged.js --in <exports>` compares all 125 nodes with the exports: 118 are identical (ids, types, versions, credentials, retry/once/error settings, parameters) and the 7 above differ only as listed. All connections are identical. The comparison allows only for changes 1, 3 and 5 from this section and the 5b fixes.
+**Nothing else changed.** `validate-merged.js --in <exports>` compares all 125 nodes with the exports: 117 are identical (ids, types, versions, credentials, retry/once/error settings, parameters) and the 8 listed in 5b and 5c differ only as listed. All connections are identical. The comparison allows only for changes 1, 3 and 5 from this section, the 5b fixes and A-01.
+
+### 5c. A-01: W12 sends the AI receptionist's replies (for W13, `n8n/w13/`)
+
+W13 (the AI receptionist) answers patients through this workflow's W12 section, so W12 needed one capability it did not have:
+**free-text replies** inside WhatsApp's 24-hour customer-service window (a patient who just wrote to you may get a normal message,
+not only a template). Only the pasted `wa-send.js` block in two Code nodes changes; templates behave exactly as before.
+
+| # | Node | Node id | Change |
+|---|---|---|---|
+| 4 (again) | `W12 – Prepare request` | `9ea2ef1c-1da9-45b5-9646-bd1788b6f9bd` | **A-01.** `wa-send.js` block replaced by the current `n8n/snippets/wa-send.js`: an item with `message_type: 'text'` sends `text_body` as free text, ONLY if `last_inbound_at` (the patient's last message) is less than 23 h 55 min ago, else `blocked` ("only an approved template may be sent"). Same allowlist, quiet-hours and decision checks as templates. New template `human_handoff_alert` (staff alert for AI hand-offs). |
+| 8 | `W12 – Read reply` | `1b70dbe1-3bff-4d49-b6d5-47bacb9c6f4b` | **A-01.** The same block (this node builds the Inbox row): a text message is logged with its text as Body and an empty Template. |
+
+To get A-01 into the master you already imported, either re-import this file, or open those two Code nodes and replace everything
+from `const WA_TEMPLATES` down to the end of `function waInboxRow` with the same part of `n8n/snippets/wa-send.js`.
 
 ## 6. Final n8n JSON
 
@@ -186,7 +200,7 @@ PASS 13. W12 returns its result to the calling branch — Call -> W3 – Sent? /
 PASS 14. credentials referenced correctly — Header Auth account 2 x34, WhatsApp Cloud API x1 (W12 – Meta send only), Header Auth account x1, Telegram account x1
 PASS 15. no secret or token values in the file (placeholders only)
 PASS 16. the safety guards are intact (real clock everywhere, decision never rebuilt, TEST_MODE / allowlist settings unchanged)
-PASS 17. nothing else changed: 118 exported nodes identical; 7 differ ONLY by the 5 fixes
+PASS 17. nothing else changed: 117 exported nodes identical; 8 differ ONLY by the 5 fixes + A-01
 ```
 (Checks 16 and 17 are extra. They fail on the as-exported merge and on each fix reverted one by one: I tested that.)
 

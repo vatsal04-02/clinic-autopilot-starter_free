@@ -118,4 +118,24 @@ const testRow = waInboxRow({ ...input, decision: { ...base.decision, test_mode: 
 eq([testRow.Status, testRow.Sent_By, testRow.Send], ['failed', 'W5-reminders (TEST_MODE: sent to +919000000001)', false]);
 eq(waInboxRow({ template: 'hello_world' }, { send_status: 'uncertain' }, 1).Body, '[template hello_world]');
 
+// ---------------------------------------------------------------- free-text replies (W13), 24-hour window
+const LAST = Math.floor(DAY / 1000) - 600;   // the patient wrote 10 minutes ago
+const text = (over = {}, c = cfg, now = DAY) => waPrepare({ ...base, template: '', template_params: {}, message_type: 'text', text_body: 'Hello! We are open 9-7.', last_inbound_at: LAST, ...over }, c, now, h);
+p = text();
+eq([p.call_meta, p.send_status], [true, 'pending']);
+eq(p.meta_request, { messaging_product: 'whatsapp', recipient_type: 'individual', to: '919876543210', type: 'text', text: { preview_url: false, body: 'Hello! We are open 9-7.' } }, 'text: type text, body as given, no template');
+eq(text({ text_body: 'Book here: https://cal.com/demo' }).meta_request.text.preview_url, true, 'a link gets a preview');
+eq(text({ text_body: '  a\u0000b\u0007  ' }).meta_request.text.body, 'ab', 'control characters removed, trimmed');
+eq(text({ text_body: 'x'.repeat(5000) }).meta_request.text.body.length, 4096, 'WhatsApp text limit');
+eq(stop(text({ text_body: '   ' })), [false, 'invalid']);
+eq(stop(text({ last_inbound_at: undefined })), [false, 'invalid'], 'no last_inbound_at: refused (cannot prove the 24h window)');
+eq(stop(text({ last_inbound_at: Math.floor(DAY / 1000) - 23 * 3600 })), [true, 'pending'], '23 h after the patient wrote: allowed');
+eq(stop(text({ last_inbound_at: Math.floor(DAY / 1000) - 24 * 3600 })), [false, 'blocked'], '24 h: outside the window');
+eq(text({ last_inbound_at: Math.floor(DAY / 1000) - 24 * 3600 }).send_error, 'outside the 24-hour WhatsApp window: only an approved template may be sent');
+eq(stop(text({ decision: { ...base.decision, to: '+919811111111' } })), [false, 'blocked'], 'text obeys the allowlist');
+eq(stop(text({}, cfg, NIGHT)), [false, 'blocked'], 'text obeys quiet hours');
+eq(stop(text({ decision: { send: false, reason: 'automation paused' } })), [false, 'not_requested'], 'text obeys the caller guard');
+eq(prep({ template: 'human_handoff_alert', template_params: { clinic_name: 'D', lead_name: 'A', lead_phone: '+919800000001', reason: '' } }).meta_request.template.components[0].parameters.map((x) => x.text), ['D', 'A', '+919800000001', '(see the Grist inbox)'], 'handoff alert template, reason falls back');
+eq(waInboxRow({ ...input, message_type: 'text', template: '', message_text: '', text_body: 'Hi there' }, { send_status: 'accepted', wa_message_id: 'wamid.T' }, 5), { Direction: 'Out', Body: 'Hi there', Template: '', Sent_By: 'W5-reminders', WA_Message_ID: 'wamid.T', Status: 'queued', Send: false, Created_At: 5 }, 'text rows: body = the text, no template');
+
 console.log(`All ${n} wa-send cases pass`);

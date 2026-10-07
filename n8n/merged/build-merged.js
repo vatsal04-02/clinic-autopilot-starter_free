@@ -12,8 +12,9 @@
 //   4. settings.errorWorkflow is left out: a workflow that contains an Error Trigger is its own error workflow in n8n,
 //      and n8n does not run it again when the error run itself fails (no loop).
 //   5. FIXES (on by default, `--no-fixes` builds the as-exported merge): the five defects reported in README.md section 3
-//      that you asked to have fixed before the first import (I-01 .. I-05). Each edit asserts the exact old text is in
-//      the export, so a different export fails loudly instead of being patched blindly. See FIXES below.
+//      that you asked to have fixed before the first import (I-01 .. I-05), plus A-01 (W12 sends W13's free-text replies,
+//      README section 5c). Each edit asserts the exact old text is in the export, so a different export fails loudly
+//      instead of being patched blindly. See FIXES below.
 //   6. Unless --keep-private: the Cal.com webhook secret and the phone numbers in the W12 allowlist are replaced by
 //      placeholders, so the file can live in a public repo. Paste them back after import.
 // Node ids, webhook ids, paths, schedules, credentials, Grist tables / columns and all code are kept as exported.
@@ -225,6 +226,16 @@ const fixNode = (name, why, fn) => {
   fn(n);
   FIXED_NODES.push({ name, id: n.id, why });
 };
+// The pasted wa-send.js helpers: from "const WA_TEMPLATES" to the blank line after waInboxRow (same cut as the W12 drift test).
+const WA_SEND_SRC = fs.readFileSync(path.join(__dirname, '..', 'snippets', 'wa-send.js'), 'utf8');
+const WA_SEND_BLOCK = WA_SEND_SRC.slice(WA_SEND_SRC.indexOf('const WA_TEMPLATES'), WA_SEND_SRC.indexOf('if (typeof module'));
+const waSendSpan = (code) => {
+  const start = code.indexOf('const WA_TEMPLATES');
+  const fn = code.indexOf('function waInboxRow', start);
+  const close = code.indexOf('\n}\n\n', fn);
+  if (start < 0 || fn < 0 || close < 0 || code.indexOf('const WA_TEMPLATES', start + 1) >= 0) return null;
+  return { start, end: close + 4, text: code.slice(start, close + 4) };
+};
 const replaceOnce = (node, key, from, to) => {
   const src = node.parameters[key];
   const parts = src.split(from);
@@ -262,6 +273,15 @@ if (!NO_FIXES) {
       n.credentials = { httpHeaderAuth: { id: grist.id, name: grist.name } };
     });
   }
+  // A-01  W13 (AI receptionist) replies with free text inside WhatsApp's 24-hour window and alerts staff with human_handoff_alert.
+  //       Only the pasted wa-send.js block in W12's two Code nodes changes (templates work exactly as before).
+  for (const name of ['Prepare request', 'Read reply']) {
+    fixNode(`W12${SEP}${name}`, 'A-01: wa-send.js with free-text replies (24-hour window) + human_handoff_alert, for W13', (n) => {
+      const span = waSendSpan(n.parameters.jsCode);
+      if (!span || span.text.includes('WA_TEXT_WINDOW_MS')) throw new Error(`fix: ${n.name} has no old wa-send.js block (already patched?)`);
+      n.parameters.jsCode = n.parameters.jsCode.slice(0, span.start) + WA_SEND_BLOCK + n.parameters.jsCode.slice(span.end);
+    });
+  }
 }
 
 // ---------------------------------------------------------------- privacy (public repo)
@@ -292,5 +312,5 @@ fs.writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
 console.log(`wrote ${OUT}: ${out.nodes.length} nodes (${out.nodes.filter((n) => n.type !== 'n8n-nodes-base.stickyNote').length} functional), ${Object.keys(out.connections).length} connection sources`);
 console.log(`modules: ${EXPECTED.map((m) => `${m}<-${exportsByModule[m].file}`).join(', ')}`);
 console.log(`execute-workflow nodes rewired to this workflow: ${report.executeWorkflowRewired.map((r) => r.node).join(', ')}`);
-console.log(`fixed nodes (${FIXED_NODES.length}): ${FIXED_NODES.map((f) => f.name).join(', ') || 'none (--no-fixes)'}`);
+console.log(`fixed nodes (${new Set(FIXED_NODES.map((f) => f.name)).size}): ${FIXED_NODES.map((f) => `${f.name} [${f.why.split(':')[0]}]`).join(', ') || 'none (--no-fixes)'}`);
 console.log(`redactions: ${report.redactions.length ? report.redactions.join('; ') : 'none (--keep-private)'}`);

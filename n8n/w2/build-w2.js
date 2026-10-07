@@ -1,7 +1,9 @@
 // Builds the STANDALONE W2 - WhatsApp Inbound workflow:   node n8n/w2/build-w2.js [--out <file>]
 // Code-node sources live in n8n/w2/code/*.js (readable, testable); this script embeds them, wires the nodes and lays out the canvas.
-// W2 is independent: no Execute Workflow node, no call to W1/W3-W12, no Meta call, no master workflow. Its only credential is the existing
-// Grist "Header Auth account 2". The Meta verify token is a PLACEHOLDER in "W2 – Verify Config" (paste your own after import).
+// W2 sends nothing and never calls Meta. Its one link to another workflow: after a patient message is stored it starts W13 (AI
+// receptionist) for that message WITHOUT waiting ("W2 – Hand To AI"), only when "W2 – Config" > ai_workflow_id holds a real workflow id
+// (the shipped placeholder = off, W2 then behaves exactly as before). Its only credential is the existing Grist "Header Auth account 2".
+// The Meta verify token is a PLACEHOLDER in "W2 – Verify Config" (paste your own after import).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -40,6 +42,7 @@ const N = {
   recheckConv: `${P}Recheck Conversation`, readCreatedConv: `${P}Read Created Conversation`, convResolved: `${P}Conversation Resolved?`, convReady: `${P}Conversation Ready`,
   addMessage: `${P}Add Message`, messageSaved: `${P}Message Saved`, updateConv: `${P}Update Conversation`, staffAlert: `${P}Prepare Staff Alert`,
   buildLog: `${P}Build Run Log`, canLog: `${P}Can Log?`, runLog: `${P}Run Log`,
+  aiWanted: `${P}AI Wanted?`, handToAi: `${P}Hand To AI`, aiHanded: `${P}AI Handed`,
 };
 
 // ---------------------------------------------------------------- node factories
@@ -107,6 +110,7 @@ setNode(N.config, at(2, 5), [
   ['unread_mode', 'count'],                              // 'count' = Conversations.Unread is an Integer (schema.md); 'flag' = a Toggle
   ['message_sent_by', 'Patient'],
   ['default_lead_name', 'WhatsApp Lead'],
+  ['ai_workflow_id', 'PASTE_W13_WORKFLOW_ID'],           // W13 - AI receptionist's id (from its URL); the placeholder = AI hand-off off
 ]);
 codeNode(N.parse, at(3, 5), readCode('parse-meta-event.js'));
 ifNode(N.isWebhook, at(4, 5), "$json.source === 'webhook'");
@@ -165,9 +169,21 @@ grist(N.updateConv, at(2, 22), { table: 'Conversations', method: 'PATCH', body: 
 
 // ---------------------------------------------------------------- SECTION F: staff alert (payload only) + Run_Log
 codeNode(N.staffAlert, at(3, 22), readCode('prepare-staff-alert.js'));
-codeNode(N.buildLog, at(4, 22), readCode('build-run-log.js'));
-ifNode(N.canLog, at(5, 22), '$json.can_log === true');
-grist(N.runLog, at(6, 22), { table: 'Run_Log', method: 'POST', onError: 'continueRegularOutput', body: '={{ JSON.stringify({ records: [{ fields: $json.log }] }) }}' });
+// W13 gets the stored message (not for the manual test's fake data). Fire and forget: Meta's 200 was already sent, W2 moves on.
+ifNode(N.aiWanted, at(4, 22), "$json.run_outcome === 'ok' && !$json.test_case && /^[A-Za-z0-9]{8,32}$/.test(String($json.ai_workflow_id || ''))");
+add({
+  name: N.handToAi, type: 'n8n-nodes-base.executeWorkflow', typeVersion: 1.4, position: at(5, 21), onError: 'continueRegularOutput',
+  parameters: {
+    workflowId: { __rl: true, value: '={{ $json.ai_workflow_id }}', mode: 'id' },
+    workflowInputs: { mappingMode: 'defineBelow', value: {}, matchingColumns: [], schema: [], attemptToConvertTypes: false, convertFieldsToString: true },
+    mode: 'each',
+    options: { waitForSubWorkflow: false },
+  },
+});
+codeNode(N.aiHanded, at(6, 21), readCode('ai-handed.js'));
+codeNode(N.buildLog, at(7, 22), readCode('build-run-log.js'));
+ifNode(N.canLog, at(8, 22), '$json.can_log === true');
+grist(N.runLog, at(9, 22), { table: 'Run_Log', method: 'POST', onError: 'continueRegularOutput', body: '={{ JSON.stringify({ records: [{ fields: $json.log }] }) }}' });
 
 // ---------------------------------------------------------------- notes (sections)
 const W = 2500;
@@ -184,7 +200,7 @@ sticky(`${P}Section C Clinic`, [-60, 1500], W, 400, 6, '## SECTION C — CLINIC,
 sticky(`${P}Section D Lead`, [-60, 2200], W, 400, 3, '## SECTION D — LEAD\nFind the lead by normalized phone; if none, create one (Source WhatsApp, Status New, Lead_id L-YYYYMMDD-NNNN). After creating, look again: parallel messages from one new patient converge on the lowest row id.');
 sticky(`${P}Section E Conversation`, [-60, 3040], W, 420, 2, '## SECTION E — CONVERSATION\nFind the conversation by normalized phone; if none, create it (Phone + Lead). After creating, look again: parallel messages converge on the lowest row id.');
 sticky(`${P}Section F Message and Log`, [-60, 3780], W, 420, 5, '## SECTION F — MESSAGE, STAFF ALERT PAYLOAD, RUN_LOG\nAdd the Messages row (Direction In, WA_Message_ID), then update Last_Inbound_At / Unread (Automation_Paused and Assigned_To are never touched). A new lead prepares a staff-alert payload for W12 (decision.send = false: NOT sent from here). Every message ends in one Run_Log row: ok, skipped (duplicate, bad number) or failed (with the reason). A failing Run_Log write ends quietly: no retries, no loops.');
-sticky(`${P}Section Future`, [-60, 4260], W, 260, 7, '## SECTION FUTURE — AFTER THE MERGE\nW12 (the one WhatsApp sender) is the only planned integration point: route the staff-alert payload through a guard node (owner phone, TEST_MODE, quiet hours) and "Call W12". Not done here on purpose.');
+sticky(`${P}Section G AI`, [-60, 4260], W, 260, 7, '## SECTION G — AI RECEPTIONIST (W13)\nEvery stored patient message is handed to W13 (one run per message, W2 does not wait). W13 decides with Claude, writes the CRM and replies through W12. Off until W2 – Config > ai_workflow_id is set (and the clinic has Settings ai_mode). The new-lead staff-alert payload is still prepared only (not sent).');
 
 // ---------------------------------------------------------------- connections
 const connections = {};
@@ -235,7 +251,9 @@ link(N.addMessage, N.messageSaved, 0); link(N.addMessage, N.buildLog, 1);
 link(N.messageSaved, N.updateConv);
 link(N.updateConv, N.staffAlert, 0); link(N.updateConv, N.buildLog, 1);
 // F
-link(N.staffAlert, N.buildLog); link(N.buildLog, N.canLog);
+link(N.staffAlert, N.aiWanted); link(N.aiWanted, N.handToAi, 0); link(N.aiWanted, N.buildLog, 1);
+link(N.handToAi, N.aiHanded); link(N.aiHanded, N.buildLog);
+link(N.buildLog, N.canLog);
 link(N.canLog, N.runLog, 0); link(N.canLog, N.loop, 1);
 link(N.runLog, N.loop);
 

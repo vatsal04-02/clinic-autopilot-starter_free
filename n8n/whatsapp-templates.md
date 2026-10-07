@@ -1,6 +1,8 @@
 # WhatsApp message templates
 
-Every automated message is a Meta-approved **template**. W12 (`n8n/workflows/W12-whatsapp-send.json`) fills the
+Every automated message is a Meta-approved **template**, with one exception: W13's replies to a patient who wrote to the
+clinic in the last 24 hours are free text (WhatsApp's customer-service window, `message_type: 'text'`; W12 refuses free text
+outside the window). W12 (`n8n/workflows/W12-whatsapp-send.json`) fills the
 variables `{{1}}, {{2}}, ...` **by position**, in the order below (`WA_TEMPLATES` in `n8n/snippets/wa-send.js`).
 The template you create in WhatsApp Manager must use the **same name, the same number of variables, in the same order**,
 or Meta rejects the send (error 132000 / 132001, shown in W12's `send_error`).
@@ -21,6 +23,7 @@ Create them in **WhatsApp Manager > Message templates > Create template**:
 | `followup_day2` | W6 | Marketing (likely) | 1 name, 2 clinic_name, 3 booking_link |
 | `new_lead_staff_alert` | W1 (staff) | Utility | 1 clinic_name, 2 lead_name (Ravi), 3 lead_phone (+919800000001), 4 enquiry (Back pain; empty becomes "(no message)") |
 | `lead_escalation` | W3 (owner), if you choose it over `new_lead_staff_alert` | Utility | 1 clinic_name, 2 lead_name, 3 lead_phone, 4 waiting_minutes (31) |
+| `human_handoff_alert` | W13 (owner) when the AI hands a conversation to a person | Utility | 1 clinic_name, 2 lead_name, 3 lead_phone, 4 reason (question not covered by the knowledge base; empty becomes "(see the Grist inbox)") |
 
 ## Suggested body texts
 
@@ -31,6 +34,7 @@ Create them in **WhatsApp Manager > Message templates > Create template**:
 - **followup_day2**: Hi {{1}}, thank you for contacting {{2}}. Would you like to book your visit? You can choose a time here: {{3}} or simply reply to this message.
 - **new_lead_staff_alert**: New enquiry for {{1}}: {{2}} ({{3}}). Message: {{4}}. Please reply to them soon.
 - **lead_escalation**: Reminder for {{1}}: {{2}} ({{3}}) has been waiting {{4}} minutes without a reply. Please contact them now.
+- **human_handoff_alert**: A patient needs a person at {{1}}: {{2}} ({{3}}). Reason: {{4}}. The AI has stopped replying to them; please answer from the Grist Inbox, then untick Needs_Human.
 
 ## Adding a template later
 
