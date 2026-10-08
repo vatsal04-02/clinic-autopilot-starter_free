@@ -209,3 +209,7 @@ The full change report, architecture, settings, test results and the manual step
 | `w7-w10-mutations.test.js` | Breaks 23 safety rules once each (claims, guards, review gating, AI checks, ownership, W12); the test must catch every one. |
 | `w7-w10-regression.test.js` | Every existing suite (W1–W6, W11, W12, W13, Needs_Human gate, A1–A6) on the result. |
 | `../w7-w10/sections.js`, `../w7-w10/code/` | The node builder and the Code-node sources; the helpers are pasted verbatim from `n8n/snippets/clinic-modules.js`, `send-guard.js`, `normalize-phone.js`. |
+
+## 10. TEMPORARY: quiet hours off for testing (`DISABLE_QUIET_HOURS_FOR_TEST`)
+
+`apply-quiet-hours-switch.js` pastes one switch into the 7 nodes that apply quiet hours in W12, W13 and W7–W10, and flips it later (`--value false`). Details, the node list and the tests are in `QUIET-HOURS-SWITCH.md`. The test file is `ai-updated-workflow-clinic.quiet-hours-test.json`, with the switch ON. Switch it off when testing is done.
