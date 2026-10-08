@@ -13,6 +13,9 @@ const F = require('../tests/ai-fixtures');
 const REPO = path.join(__dirname, '..', '..');
 const W13_FILE = process.env.W13_FILE || path.join(__dirname, 'W13-AI-Receptionist.json');
 const raw13 = fs.readFileSync(W13_FILE, 'utf8');
+// The same suite runs on W13 (Anthropic) and on the OpenRouter DEMO workflow (w13-openrouter.test.js); only the provider checks differ.
+const PROVIDER = /openrouter\.ai/.test(raw13) ? 'openrouter' : 'anthropic';
+const ASK = PROVIDER === 'openrouter' ? 'W13 – Provider Request' : 'W13 – Ask Claude';   // where the provider layer starts
 const base13 = JSON.parse(raw13);
 const W2 = JSON.parse(fs.readFileSync(path.join(REPO, 'n8n/w2/W2-WhatsApp-Inbound.json'), 'utf8'));
 const MASTER = JSON.parse(fs.readFileSync(path.join(REPO, 'n8n/merged/clinic-autopilot-single-workflow.json'), 'utf8'));
@@ -84,7 +87,7 @@ function inbound(text, o = {}) {
   const meta = o.meta || fakeMeta(o.metaAnswer);
   const claude = o.claude || F.fakeClaude(o.ai);
   const wf = o.wf || wire(o.w13);
-  const r = simulate(wf.w2, { start: 'W2 – Webhook Inbound', items: [{ json: { headers: {}, params: {}, query: {}, body: o.body || metaBody(o.from || P_ASHA, o.id || `wamid.IN.${Math.random().toString(36).slice(2, 8)}`, text, o.ts, o.type) } }], grist: g, now: o.now || F.NOW, workflowId: IDS.W2, workflows: wf.workflows, meta, anthropic: claude });
+  const r = simulate(wf.w2, { start: 'W2 – Webhook Inbound', items: [{ json: { headers: {}, params: {}, query: {}, body: o.body || metaBody(o.from || P_ASHA, o.id || `wamid.IN.${Math.random().toString(36).slice(2, 8)}`, text, o.ts, o.type) } }], grist: g, now: o.now || F.NOW, workflowId: IDS.W2, workflows: wf.workflows, meta, anthropic: claude, openrouter: F.fakeOpenRouter(claude) });
   const runs = allRuns(r);
   const w13 = runs.filter((x) => x.workflowId === IDS.W13);
   const w12 = runs.filter((x) => x.workflowId === IDS.MASTER);
@@ -96,7 +99,7 @@ const runW13 = (item, o = {}) => {
   const meta = o.meta || fakeMeta();
   const claude = o.claude || F.fakeClaude(o.ai);
   const wf = o.wf || wire(o.w13);
-  const r = simulate(wf.w13, { start: o.start || 'W13 – When Called', items: [{ json: item }], grist: g, now: o.now || F.NOW, workflowId: IDS.W13, workflows: wf.workflows, meta, anthropic: claude });
+  const r = simulate(wf.w13, { start: o.start || 'W13 – When Called', items: [{ json: item }], grist: g, now: o.now || F.NOW, workflowId: IDS.W13, workflows: wf.workflows, meta, anthropic: claude, openrouter: F.fakeOpenRouter(claude) });
   return { g, meta, claude, r, runs: allRuns(r) };
 };
 const rows = (g, t) => g.docs.DOCA[t].map((x) => ({ id: x.id, ...x.fields }));
@@ -144,10 +147,18 @@ test('structure: names, connections, nothing dangling or unreachable, 4 entry po
 });
 test('structure: credentials, placeholders, no secrets; only W12 talks to Meta', (w) => {
   const http = w.nodes.filter((x) => x.type === 'n8n-nodes-base.httpRequest');
-  const claude = http.filter((x) => /anthropic/.test(x.parameters.url));
-  assert.deepStrictEqual(claude.map((x) => x.name), ['W13 – Ask Claude']);
-  assert.deepStrictEqual(claude[0].credentials, { httpHeaderAuth: { id: 'PASTE_ANTHROPIC_CREDENTIAL_ID', name: 'Anthropic API' } });
-  assert.deepStrictEqual(claude[0].parameters.headerParameters.parameters, [{ name: 'anthropic-version', value: '2023-06-01' }]);
+  const claude = http.filter((x) => /anthropic|openrouter/.test(x.parameters.url));
+  if (PROVIDER === 'anthropic') {
+    assert.deepStrictEqual(claude.map((x) => x.name), ['W13 – Ask Claude']);
+    assert.deepStrictEqual(claude[0].credentials, { httpHeaderAuth: { id: 'PASTE_ANTHROPIC_CREDENTIAL_ID', name: 'Anthropic API' } });
+    assert.deepStrictEqual(claude[0].parameters.headerParameters.parameters, [{ name: 'anthropic-version', value: '2023-06-01' }]);
+  } else {
+    assert.deepStrictEqual(claude.map((x) => [x.name, x.parameters.method, x.parameters.url]), [['W13 – Ask Model', 'POST', 'https://openrouter.ai/api/v1/chat/completions']]);
+    assert.deepStrictEqual(claude[0].credentials, { httpHeaderAuth: { id: 'PASTE_OPENROUTER_CREDENTIAL_ID', name: 'OpenRouter API' } });
+    assert.deepStrictEqual(claude[0].parameters.headerParameters.parameters, [{ name: 'X-Title', value: 'Clinic Autopilot (demo)' }], 'the key comes from the credential, never a header value');
+    assert.strictEqual(claude[0].parameters.jsonBody, '={{ JSON.stringify($json.body) }}');
+    assert(!/api\.anthropic\.com/.test(raw13) && !/sk-or-/.test(raw13), 'no Anthropic call and no OpenRouter key in the demo');
+  }
   assert.deepStrictEqual([claude[0].onError, claude[0].retryOnFail, claude[0].maxTries, claude[0].parameters.options.timeout], ['continueRegularOutput', true, 2, 45000]);
   for (const x of http.filter((n) => n !== claude[0])) assert.deepStrictEqual(x.credentials, { httpHeaderAuth: { id: '9J6XxrIQoFDcQZ0Y', name: 'Header Auth account 2' } }, x.name);
   assert(!/graph\.facebook\.com/.test(raw13), 'W13 must not call Meta (W12 does)');
@@ -156,7 +167,8 @@ test('structure: credentials, placeholders, no secrets; only W12 talks to Meta',
   const phones = (raw13.match(/\b9[1-9]\d{9}\b|\+91\d{10}/g) || []).filter((p) => !/^(\+?91)?90000000\d\d$/.test(p));
   assert.deepStrictEqual(phones, [], 'only made-up 9000000xxx numbers');
   const cfg = Object.fromEntries(node(w, 'W13 – Config').parameters.assignments.assignments.map((a) => [a.name, a.value]));
-  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', anthropic_model: 'claude-haiku-4-5', w12_workflow_id: 'PASTE_W12_WORKFLOW_ID', min_confidence: 0.7, max_ai_replies_per_hour: 6, history_limit: 12, slot_days: 7, pause_on_handoff: false, staff_alert_template: 'human_handoff_alert' });
+  const model = PROVIDER === 'anthropic' ? { anthropic_model: 'claude-haiku-4-5' } : { model_provider: 'openrouter', openrouter_model: 'openai/gpt-4o-mini' };
+  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', ...model, w12_workflow_id: 'PASTE_W12_WORKFLOW_ID', min_confidence: 0.7, max_ai_replies_per_hour: 6, history_limit: 12, slot_days: 7, pause_on_handoff: false, staff_alert_template: 'human_handoff_alert' });
   const calls = w.nodes.filter((x) => x.type === 'n8n-nodes-base.executeWorkflow');
   assert.deepStrictEqual(calls.map((x) => [x.name, x.parameters.workflowId.value, x.parameters.mode, x.parameters.options.waitForSubWorkflow !== false, x.onError]), [
     ['W13 – Run Each Test', '={{ $workflow.id }}', 'each', true, 'continueRegularOutput'],
@@ -173,6 +185,11 @@ test('structure: the shared helpers are pasted verbatim from n8n/snippets/', (w)
   for (const nm of ['W13 – Build Context', 'W13 – Plan', 'W13 – Plan Ready', 'W13 – Record Sends']) {
     const c = strip(node(w, nm).parameters.jsCode);
     for (const b of blocks) assert(c.includes(strip(b)), `${nm} does not embed the current snippet: ${b.slice(0, 40)}`);
+  }
+  if (PROVIDER === 'openrouter') {
+    const prov = snip('ai-provider.js');
+    const pb = strip(prov.slice(prov.indexOf('const AI_OPENROUTER_FINISH'), prov.indexOf('if (typeof module')));
+    for (const nm of ['W13 – Provider Request', 'W13 – Provider Answer']) assert(strip(node(w, nm).parameters.jsCode).includes(pb), `${nm} does not embed n8n/snippets/ai-provider.js`);
   }
   assert(strip(node(w, 'W13 – Start').parameters.jsCode).includes(strip(blocks[1])));
   let n = 0;
@@ -291,7 +308,7 @@ test('duplicates: the same webhook twice and a re-run of W13 on a handled messag
 });
 test('AI failures -> safe hand-off, never a made-up answer: timeout, overload (529), not JSON, invalid decision, refusal', (w) => {
   const cases = [
-    ['timeout', () => ({ throw: 'timeout of 45000ms exceeded' }), /Claude request failed: timeout/],
+    ['timeout', () => ({ throw: 'timeout of 45000ms exceeded' }), /Claude request failed: (OpenRouter: )?timeout/],
     ['overloaded', () => ({ http: { status: 529, body: { type: 'error', error: { type: 'overloaded_error' } } } }), /status code 529/],
     ['not JSON', () => 'Sure! The price is ₹999.', /not JSON/],
     ['invalid decision', () => ({ ...F.BASE_DECISION, intent: 'buy', reply: 'ok' }), /invalid decision: unknown intent/],
@@ -422,7 +439,7 @@ if (!process.env.W13_NO_MUTATIONS) {
     'a failed booking write is still confirmed': (w) => code(w, 'W13 – Plan Ready', 'if (errs.length)', 'if (false)'),
     'a missing W12 answer counts as sent': (w) => code(w, 'W13 – Record Sends', "sent: false, send_status: 'no_result'", "sent: true, send_status: 'accepted'"),
     'the rate limit is off': (w) => code(w, 'W13 – Build Context', 'if (c.ai_replies_last_hour >= c.max_per_hour)', 'if (false)'),
-    'Claude is asked before the claim': (w) => { rewire(w, 'W13 – Claim?', 0, 'W13 – Ask Claude'); },
+    'Claude is asked before the claim': (w) => { rewire(w, 'W13 – Claim?', 0, ASK); },
     'handed-off leads count as Contacted': (w) => code(w, 'W13 – Record Sends', "const answered = !!reply && reply.sent && plan.route !== 'handoff';", 'const answered = !!reply && reply.sent;'),
   };
   let missed = 0;
@@ -433,4 +450,4 @@ if (!process.env.W13_NO_MUTATIONS) {
   }
   if (missed) { console.error(`\n${missed} mutation(s) were not caught`); process.exit(1); }
 }
-console.log(`\nW13: ${suite.length} end-to-end check groups pass (W2 -> W13 -> master W12, ${base13.nodes.length} W13 nodes)`);
+console.log(`\nW13${PROVIDER === 'openrouter' ? ' DEMO (OpenRouter)' : ''}: ${suite.length} end-to-end check groups pass (W2 -> W13 -> master W12, ${base13.nodes.length} W13 nodes)`);

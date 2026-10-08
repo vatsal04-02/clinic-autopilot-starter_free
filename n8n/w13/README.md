@@ -30,10 +30,12 @@ Patient WhatsApp ─► Meta ─► W2  (answers Meta 200, stores lead / convers
 
 | File | What it is |
 |---|---|
-| `W13-AI-Receptionist.json` | **The workflow to import** (52 nodes: 47 working + 5 notes). |
-| `build-w13.js` | Rebuilds it from `code/*.js` + the snippets: `node n8n/w13/build-w13.js` |
+| `W13-AI-Receptionist.json` | **The workflow to import** (52 nodes: 47 working + 5 notes). Claude via the Anthropic API. |
+| `W13-AI-Receptionist-Demo-OpenRouter.json` | **DEMO / testing variant**, workflow name "W13 DEMO - AI receptionist (OpenRouter)": the same workflow with only the model provider swapped to OpenRouter (section 6). |
+| `build-w13.js` | Rebuilds it from `code/*.js` + the snippets: `node n8n/w13/build-w13.js` (the demo: `--provider openrouter`) |
 | `code/*.js` | The 18 Code nodes' own code. Four of them get the shared helpers pasted in at build time. |
 | `w13.test.js` | 17 end-to-end check groups + 15 mutation tests: `node n8n/w13/w13.test.js` |
+| `w13-openrouter.test.js` | The demo: proves only the provider layer differs, checks the OpenRouter request, the safety cases through OpenRouter, then runs the whole `w13.test.js` suite on the demo file. |
 | `knowledge-base.sample.csv` | FAKE demo rows for the new Knowledge table (import into Grist, then replace with the clinic's real facts). |
 | `../snippets/ai-receptionist.js` (+ `.test.js`) | All W13 decision logic as pure functions, with 30 unit-test groups. |
 
@@ -158,3 +160,58 @@ When the AI hands a conversation to a person, staff answer from the Grist Inbox,
 8. **Meta signature.** W2 still does not verify `X-Hub-Signature-256` (noted in W2's README). Anyone who knows the webhook URL could post a fake "patient message" that the AI then answers. Add the signature check before going live.
 9. **Costs.** One Claude call per answered message: about 2,500–4,000 input tokens and 200–400 output tokens (`W13 – Done` > `usage` shows the real numbers). Prompt caching on the rules + clinic facts only starts once that prefix is over 4,096 tokens (Haiku 4.5's minimum), so with a small knowledge base there is no caching benefit. Gates, nights, STOP and handled messages cost nothing.
 10. **Memory** is the last 12 messages plus the lead's AI_Summary (updated every turn), so very old details fall out of the prompt on purpose.
+
+## 6. Demo with OpenRouter (temporary, instead of an Anthropic key)
+
+`W13-AI-Receptionist-Demo-OpenRouter.json` ("**W13 DEMO - AI receptionist (OpenRouter)**") is W13 with ONLY the model-provider
+layer swapped. Everything else is identical, and `w13-openrouter.test.js` checks this node by node:
+- same node ids, gates, checks, hand-offs and CRM writes;
+- W12 still does all sending;
+- the same decision JSON contract and the same Knowledge, Grist and W2 logic.
+
+| W13 (Anthropic) | W13 DEMO (OpenRouter) |
+|---|---|
+| `W13 – Ask Claude` (HTTP `https://api.anthropic.com/v1/messages`, credential **Anthropic API**) | `W13 – Provider Request` (Code: the same request, translated) → `W13 – Ask Model` (HTTP `https://openrouter.ai/api/v1/chat/completions`, credential **OpenRouter API**) → `W13 – Provider Answer` (Code: the answer translated back) |
+| `W13 – Config` > `anthropic_model` = `claude-haiku-4-5` | `W13 – Config` > `model_provider` = `openrouter`, `openrouter_model` = `openai/gpt-4o-mini` |
+
+**What the translation does** (`n8n/snippets/ai-provider.js`, unit-tested):
+
+- **Request.**
+  - The same instructions and facts become one system message: rules, then clinic + Knowledge, then calendar, free slots, patient, appointments and history. The order is kept, so the stable part stays first.
+  - The same `<patient_message>`, the same `max_tokens` (1500).
+  - The same decision JSON schema goes in as `response_format: {type: json_schema, json_schema: {strict: true}}`.
+  - `provider.require_parameters: true` makes OpenRouter use only an endpoint that enforces the schema.
+  - Anthropic's `cache_control` marker is dropped; OpenRouter providers cache long prefixes by themselves.
+- **Answer.** `choices[0].message.content` becomes the same `{content: [{type: text}], stop_reason}` shape that `W13 – Plan` already reads.
+  - `length` maps to "cut off".
+  - A refusal or content filter maps to "declined".
+  - HTTP errors, timeouts and 429 rate limits become an error.
+  - Every one of these failures becomes a **hand-off to a person**, as with Claude.
+  - `W13 – Plan` then parses, validates and fact-checks the decision with the unchanged code. Nothing is relaxed.
+
+**Model used for the demo: `openai/gpt-4o-mini`.** It is cheap, supports strict JSON-schema structured outputs, and handles Hindi and Hinglish well.
+- Change it in `W13 – Config` > `openrouter_model` (any `vendor/model` id from openrouter.ai/models).
+- Before you pick another model, check on its OpenRouter page that **structured_outputs** is listed. If no endpoint supports it, OpenRouter refuses the call (because of `require_parameters`) and every message is handed to a person: safe, but useless.
+- `:free` models are not recommended here. Few of them enforce a JSON schema, and they are heavily rate-limited.
+- A wrong `model_provider` or an empty or malformed model id stops the run before any call, with a clear error.
+
+**Setup (demo):**
+1. In OpenRouter, create an API key (openrouter.ai > Keys) and add a little credit. Never paste the key anywhere except the n8n credential below.
+2. In n8n, go to Credentials > New > **Header Auth**:
+   - Credential name: **OpenRouter API**
+   - Name: `Authorization`
+   - Value: `Bearer <your OpenRouter key>` (the word Bearer, a space, then the key).
+3. Import `W13-AI-Receptionist-Demo-OpenRouter.json`.
+   - On `W13 – Ask Model`, pick the **OpenRouter API** credential.
+   - In `W13 – Config`, set `w12_workflow_id` to the master workflow's id.
+   - Save. **Do not activate it**: W2 calls it without it being active, and only the 08:05 night-retry needs activation.
+4. **Dry run:** click Execute workflow on `W13 – Manual Test`.
+   - The model is really called; nothing is written to Grist and nothing is sent.
+   - `W13 – Test Report` shows the 7 scenarios. `usage` shows the model OpenRouter actually used and the tokens.
+5. To use it with real messages, put **this** workflow's id in W2 – Config > `ai_workflow_id`, keep the clinic's `ai_mode` at `draft` (prepared, not sent) and TEST_MODE on.
+   - `auto` still sends only through W12, after every check. That step is yours to decide; nothing here sets it.
+
+**Back to Anthropic later:** put W13's id (the Anthropic workflow) back into W2 – Config > `ai_workflow_id`. No other change is needed: both workflows read the same Grist data and write the same columns.
+- Only ever have ONE of the two connected to W2, and at most one active, because both have the 08:05 run.
+- The Run_Log and the `AI_Reason` texts say "Claude …" in both workflows. They mean "the model".
+

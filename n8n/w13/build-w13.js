@@ -1,4 +1,8 @@
-// Builds the W13 - AI receptionist workflow:   node n8n/w13/build-w13.js [--out <file>]
+// Builds the W13 - AI receptionist workflow:   node n8n/w13/build-w13.js [--provider anthropic|openrouter] [--out <file>]
+//   --provider anthropic  (default)  W13-AI-Receptionist.json: Claude through the Anthropic API ("W13 – Ask Claude").
+//   --provider openrouter            W13-AI-Receptionist-Demo-OpenRouter.json, a separate DEMO workflow: only the provider layer
+//                                    differs ("W13 – Provider Request" -> "W13 – Ask Model" -> "W13 – Provider Answer", see
+//                                    n8n/snippets/ai-provider.js) plus model_provider / openrouter_model in W13 – Config.
 // Code-node sources live in n8n/w13/code/*.js; the shared helpers are pasted in VERBATIM from n8n/snippets/ (normalize-phone,
 // send-guard, clinic-hours, ai-receptionist) so the tested code is the code that runs. This script wires the nodes and lays out the canvas.
 //
@@ -10,12 +14,17 @@ const path = require('path');
 const crypto = require('crypto');
 
 const args = process.argv.slice(2);
-const OUT = args.includes('--out') ? args[args.indexOf('--out') + 1] : path.join(__dirname, 'W13-AI-Receptionist.json');
+const PROVIDER = args.includes('--provider') ? args[args.indexOf('--provider') + 1] : 'anthropic';
+if (!['anthropic', 'openrouter'].includes(PROVIDER)) throw new Error(`--provider must be anthropic or openrouter, not ${PROVIDER}`);
+const OR = PROVIDER === 'openrouter';
+const OUT = args.includes('--out') ? args[args.indexOf('--out') + 1] : path.join(__dirname, OR ? 'W13-AI-Receptionist-Demo-OpenRouter.json' : 'W13-AI-Receptionist.json');
 const CODE = path.join(__dirname, 'code');
 const SNIPPETS = path.join(__dirname, '..', 'snippets');
 
 const GRIST_CRED = { httpHeaderAuth: { id: '9J6XxrIQoFDcQZ0Y', name: 'Header Auth account 2' } };   // the existing Grist credential, by reference only
 const ANTHROPIC_CRED = { httpHeaderAuth: { id: 'PASTE_ANTHROPIC_CREDENTIAL_ID', name: 'Anthropic API' } };   // create it in n8n (README); no key in this file
+const OPENROUTER_CRED = { httpHeaderAuth: { id: 'PASTE_OPENROUTER_CREDENTIAL_ID', name: 'OpenRouter API' } };   // Header Auth: Authorization = Bearer <key>, set in n8n only
+const OPENROUTER_MODEL = 'openai/gpt-4o-mini';   // demo default: cheap, strict json_schema structured outputs
 const W12_PLACEHOLDER = 'PASTE_W12_WORKFLOW_ID';
 const uuid = (seed) => {
   const hx = crypto.createHash('sha256').update(`w13:${seed}`).digest('hex');
@@ -37,6 +46,8 @@ const LIB = [
   '// ---- this node ----',
 ].join('\n');
 const withLib = (f) => `${LIB}\n${readCode(f)}`;
+const PROV_SRC = snip('ai-provider.js');
+const withProvider = (f) => `// ---- pasted from n8n/snippets/ai-provider.js - keep identical ----\n${PROV_SRC.slice(PROV_SRC.indexOf('const AI_OPENROUTER_FINISH'), PROV_SRC.indexOf('if (typeof module'))}// ---- this node ----\n${readCode(f)}`;
 const withPhone = (f) => `// Pasted from n8n/snippets/normalize-phone.js - keep identical.\n${PHONE}\n${readCode(f)}`;
 
 const P = 'W13 – ';
@@ -48,6 +59,7 @@ const N = {
   settings: `${P}Settings`, knowledge: `${P}Knowledge`, message: `${P}Message`, convKey: `${P}Conversation Key`, conversation: `${P}Conversation`,
   leadKey: `${P}Lead Key`, lead: `${P}Lead`, history: `${P}History`, appointments: `${P}Appointments`, context: `${P}Build Context`,
   askAi: `${P}Ask AI?`, claim: `${P}Claim?`, claimMsg: `${P}Claim Message`, claimFailed: `${P}Claim Failed`, claude: `${P}Ask Claude`, plan: `${P}Plan`,
+  provReq: `${P}Provider Request`, askModel: `${P}Ask Model`, provAns: `${P}Provider Answer`,
   actionWrites: `${P}Action Writes?`, splitActions: `${P}Split Action Writes`, writeAction: `${P}Write Action`, checkActions: `${P}Check Action Writes`,
   planReady: `${P}Plan Ready`, splitSends: `${P}Split Sends`, sendQ: `${P}Send?`, callW12: `${P}Call W12`, recordSends: `${P}Record Sends`,
   writeQ: `${P}Write?`, writeCrm: `${P}Write CRM`, done: `${P}Done`,
@@ -114,7 +126,7 @@ setNode(N.config, at(2, 1), [
   ['grist_base_url', 'http://grist:8484'],
   ['registry_doc_id', 'fAft6pAYwFUU'],
   ['leads_table', 'LEADS'],                           // the live leads table (as in W1-W6 and W2)
-  ['anthropic_model', 'claude-haiku-4-5'],
+  ...(OR ? [['model_provider', 'openrouter'], ['openrouter_model', OPENROUTER_MODEL]] : [['anthropic_model', 'claude-haiku-4-5']]),
   ['w12_workflow_id', W12_PLACEHOLDER],               // id of the workflow that contains W12 (the master workflow), from its URL
   ['min_confidence', 0.7],
   ['max_ai_replies_per_hour', 6],
@@ -168,22 +180,47 @@ grist(N.claimMsg, at(2, 11), {
   body: `={{ JSON.stringify({ records: [{ id: ${CTX}.x.msg.row_id, fields: { AI_Status: 'processing' } }] }) }}`,
 });
 codeNode(N.claimFailed, at(3, 11), readCode('claim-failed.js'));
-add({
-  name: N.claude, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: at(3, 12), credentials: ANTHROPIC_CRED,
-  onError: 'continueRegularOutput', retryOnFail: true, maxTries: 2, waitBetweenTries: 3000,
-  parameters: {
-    method: 'POST',
-    url: 'https://api.anthropic.com/v1/messages',
-    authentication: 'genericCredentialType',
-    genericAuthType: 'httpHeaderAuth',
-    sendHeaders: true,
-    headerParameters: { parameters: [{ name: 'anthropic-version', value: '2023-06-01' }] },
-    sendBody: true,
-    specifyBody: 'json',
-    jsonBody: `={{ JSON.stringify(${CTX}.request) }}`,
-    options: { timeout: 45000 },
-  },
-});
+// ---- PROVIDER LAYER: the only part that differs between the Anthropic workflow and the OpenRouter demo ----
+// Both end in an Anthropic-shaped answer for W13 – Plan; same timeout, retries and "continue on error" (a failure = hand-off).
+if (!OR) {
+  add({
+    name: N.claude, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: at(3, 12), credentials: ANTHROPIC_CRED,
+    onError: 'continueRegularOutput', retryOnFail: true, maxTries: 2, waitBetweenTries: 3000,
+    parameters: {
+      method: 'POST',
+      url: 'https://api.anthropic.com/v1/messages',
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpHeaderAuth',
+      sendHeaders: true,
+      headerParameters: { parameters: [{ name: 'anthropic-version', value: '2023-06-01' }] },
+      sendBody: true,
+      specifyBody: 'json',
+      jsonBody: `={{ JSON.stringify(${CTX}.request) }}`,
+      options: { timeout: 45000 },
+    },
+  });
+} else {
+  codeNode(N.provReq, at(3, 12), withProvider('provider-request-openrouter.js'));
+  add({
+    name: N.askModel, type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, position: at(3, 13), credentials: OPENROUTER_CRED,
+    onError: 'continueRegularOutput', retryOnFail: true, maxTries: 2, waitBetweenTries: 3000,
+    parameters: {
+      method: 'POST',
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      authentication: 'genericCredentialType',
+      genericAuthType: 'httpHeaderAuth',
+      sendHeaders: true,
+      headerParameters: { parameters: [{ name: 'X-Title', value: 'Clinic Autopilot (demo)' }] },
+      sendBody: true,
+      specifyBody: 'json',
+      jsonBody: '={{ JSON.stringify($json.body) }}',
+      options: { timeout: 45000 },
+    },
+  });
+  codeNode(N.provAns, at(3, 14), withProvider('provider-answer-openrouter.js'));
+}
+const ASK_IN = OR ? N.provReq : N.claude;     // where the provider layer starts
+const ASK_OUT = OR ? N.provAns : N.claude;    // its Anthropic-shaped answer goes to W13 – Plan
 codeNode(N.plan, at(4, 13), withLib('plan.js'));
 
 // ---------------------------------------------------------------- SECTION E: act (appointments, W12 sends, CRM writes)
@@ -206,7 +243,16 @@ codeNode(N.done, at(6, 17), readCode('done.js'));
 
 // ---------------------------------------------------------------- notes
 const W = 2560;
-sticky(`${P}Section 00 Read Me`, [-60, -720], 1500, 560, 5,
+const DEMO_README = '## W13 DEMO – AI receptionist via OpenRouter (demo / testing only)\n' +
+  'The SAME workflow as "W13 - AI receptionist" (same gates, checks, hand-offs, CRM writes, W12 sends, decision schema). Only the model provider differs: ' +
+  '`W13 – Provider Request` turns the request into OpenRouter Chat Completions (same instructions, facts and JSON schema, strict) -> `W13 – Ask Model` (OpenRouter) -> ' +
+  '`W13 – Provider Answer` turns the answer back into the shape `W13 – Plan` checks. The model never sends anything: W12 does, after every check.\n\n' +
+  '**Fill after import:** credential **OpenRouter API** (Header Auth, Name `Authorization`, Value `Bearer <your OpenRouter key>`) on `W13 – Ask Model`; ' +
+  '`W13 – Config` > `w12_workflow_id` = the master workflow\'s id; model: `W13 – Config` > `openrouter_model` (' + OPENROUTER_MODEL + ').\n\n' +
+  '**Use ONE of the two:** point W2 – Config > `ai_workflow_id` at this workflow OR at W13, never activate both (both have the 08:05 run). ' +
+  'Back to Anthropic later: put W13\'s id in W2 again.\n\n' +
+  '**Test first:** save, then Execute workflow on `W13 – Manual Test` (dry run: real model call, nothing written or sent). See n8n/w13/README.md, section 6.';
+sticky(`${P}Section 00 Read Me`, [-60, -720], 1500, 560, 5, OR ? DEMO_README :
   '## W13 – AI receptionist (WhatsApp lead replies)\n' +
   'W2 stores every patient message, then calls W13 once per message (without waiting). W13: reads the clinic, the message, the lead, the recent conversation, ' +
   'the knowledge base and the free appointment times -> **asks Claude for a decision** (JSON: intent, action, reply, confidence, needs_human...) -> **checks it in code** ' +
@@ -218,7 +264,7 @@ sticky(`${P}Section 00 Read Me`, [-60, -720], 1500, 560, 5,
   '**Test first:** save, then click Execute workflow on `W13 – Manual Test` (dry run: real Claude, nothing written or sent). See n8n/w13/README.md.');
 sticky(`${P}Section A Entry`, [-60, -120], W, 1180, 7, '## SECTION A/B — ENTRY POINTS\n**When Called** (by W2, one message per run) · **Manual Test** (7 dry-run scenarios, each a separate run) · **Every Morning 08:05 IST** (messages that arrived 21:00-08:00 were deferred: the newest per conversation from the last 20 h is answered now).');
 sticky(`${P}Section C Read`, [-60, 1460], W, 400, 6, '## SECTION C — READ (nothing is written here)\nClinic from the Agency Registry -> Settings, Knowledge, the message row, its conversation and lead, the last 40 messages, Booked appointments. A failed read is handled in Build Context (fail safe: no AI, no send).');
-sticky(`${P}Section D Decide`, [-60, 1900], W, 560, 4, '## SECTION D — DECIDE\nGates first (already handled, STOP, ai_mode, opted out, paused, Needs_Human, newer message, night, media, rate limit). Then the message row is marked `processing` (no double replies) and Claude answers with a JSON decision (structured output). W13 – Plan checks it and turns it into a plan; any doubt = hand-off to a person.');
+sticky(`${P}Section D Decide`, [-60, 1900], W, 560, 4, `## SECTION D — DECIDE\nGates first (already handled, STOP, ai_mode, opted out, paused, Needs_Human, newer message, night, media, rate limit). Then the message row is marked \`processing\` (no double replies) and ${OR ? 'the model (OpenRouter: Provider Request -> Ask Model -> Provider Answer)' : 'Claude'} answers with a JSON decision (structured output). W13 – Plan checks it and turns it into a plan; any doubt = hand-off to a person.`);
 sticky(`${P}Section E Act`, [-60, 2620], W, 600, 3, '## SECTION E — ACT\nAppointment changes first (direct booking / WhatsApp-booked cancel); if they fail, the reply becomes a hand-off. Then W12 sends (send guard: Opted_Out, quiet hours, TEST_MODE). Then the CRM: message row (intent, action, status, reply), conversation (Last_Intent, Needs_Human), lead (stage, summary, Contacted, follow-up date) and Run_Log.');
 
 // ---------------------------------------------------------------- connections
@@ -240,9 +286,10 @@ link(N.settings, N.knowledge); link(N.knowledge, N.message); link(N.message, N.c
 link(N.conversation, N.leadKey); link(N.leadKey, N.lead); link(N.lead, N.history); link(N.history, N.appointments); link(N.appointments, N.context);
 // D
 link(N.context, N.askAi); link(N.askAi, N.claim, 0); link(N.askAi, N.plan, 1);
-link(N.claim, N.claimMsg, 0); link(N.claim, N.claude, 1);
-link(N.claimMsg, N.claude, 0); link(N.claimMsg, N.claimFailed, 1); link(N.claimFailed, N.plan);
-link(N.claude, N.plan);
+link(N.claim, N.claimMsg, 0); link(N.claim, ASK_IN, 1);
+link(N.claimMsg, ASK_IN, 0); link(N.claimMsg, N.claimFailed, 1); link(N.claimFailed, N.plan);
+if (OR) { link(N.provReq, N.askModel); link(N.askModel, N.provAns); }
+link(ASK_OUT, N.plan);
 // E
 link(N.plan, N.actionWrites); link(N.actionWrites, N.splitActions, 0); link(N.actionWrites, N.planReady, 1);
 link(N.splitActions, N.writeAction); link(N.writeAction, N.checkActions); link(N.checkActions, N.planReady);
@@ -251,7 +298,7 @@ link(N.sendQ, N.callW12, 0); link(N.sendQ, N.recordSends, 1); link(N.callW12, N.
 link(N.recordSends, N.writeQ); link(N.writeQ, N.writeCrm, 0); link(N.writeQ, N.done, 1); link(N.writeCrm, N.done);
 
 const workflow = {
-  name: 'W13 - AI receptionist',
+  name: OR ? 'W13 DEMO - AI receptionist (OpenRouter)' : 'W13 - AI receptionist',
   nodes,
   pinData: {},
   connections,

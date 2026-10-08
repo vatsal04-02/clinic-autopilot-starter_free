@@ -118,4 +118,41 @@ function fakeClaude(override) {
   return fn;
 }
 
-module.exports = { NOW, sec, at, DAY, SETTINGS, settingsRows, KNOWLEDGE, ASHA, leadRows, appointmentRows, conversationRows, messageRows, BASE_DECISION, fakeDecide, fakeClaude, claudeResponse };
+// ---------------------------------------------------------------- the same fake behind OpenRouter (W13 DEMO workflow)
+// The OpenRouter request is turned back into the Anthropic shape the fake reads (its one system message split at the CLINIC and
+// NOW sections, so a fact lost in translation makes the prompt checks fail), and the fake's answers (normal, refusal, cut off,
+// HTTP errors, thrown timeouts) are turned into OpenRouter Chat Completions answers. `fn.claude.calls` = what the model saw.
+function toOpenRouterBody(status, b) {
+  if (!b || typeof b !== 'object') return b;
+  if (status >= 400 || b.type === 'error') return { error: { code: status, message: (b.error && (b.error.message || b.error.type)) || 'error' } };
+  const text = (b.content || []).filter((c) => c && c.type === 'text').map((c) => c.text).join('');
+  const refused = b.stop_reason === 'refusal';
+  const finish = { end_turn: 'stop', max_tokens: 'length' }[b.stop_reason] || 'stop';
+  return {
+    id: 'gen-fake', object: 'chat.completion', model: 'openai/gpt-4o-mini', provider: 'OpenAI',
+    choices: [{ index: 0, finish_reason: finish, message: { role: 'assistant', content: refused ? null : text, refusal: refused ? 'I cannot help with that.' : null } }],
+    usage: { prompt_tokens: (b.usage && b.usage.input_tokens) || 0, completion_tokens: (b.usage && b.usage.output_tokens) || 0 },
+  };
+}
+function fakeOpenRouter(claude) {
+  const calls = [];
+  const fn = (method, url, headers, body) => {
+    calls.push({ method, url, headers, body });
+    const sys = body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    const i = sys.indexOf('\n\nCLINIC\n');
+    const j = sys.indexOf('\n\nNOW: ');
+    const system = i > 0 && j > i ? [sys.slice(0, i), sys.slice(i + 2, j), sys.slice(j + 2)].map((text) => ({ type: 'text', text })) : [{ type: 'text', text: sys }];
+    const req = {
+      model: body.model, max_tokens: body.max_tokens, system,
+      messages: body.messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content })),
+      output_config: body.response_format ? { format: { type: body.response_format.type, schema: body.response_format.json_schema.schema } } : undefined,
+    };
+    const r = claude(method, url, headers, req);   // may throw (timeout): the HTTP node then fails like a real timeout
+    return { status: r.status, body: toOpenRouterBody(r.status, r.body) };
+  };
+  fn.calls = calls;
+  fn.claude = claude;
+  return fn;
+}
+
+module.exports = { NOW, sec, at, DAY, SETTINGS, settingsRows, KNOWLEDGE, ASHA, leadRows, appointmentRows, conversationRows, messageRows, BASE_DECISION, fakeDecide, fakeClaude, claudeResponse, fakeOpenRouter };

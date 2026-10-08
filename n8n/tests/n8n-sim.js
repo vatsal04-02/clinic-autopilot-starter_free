@@ -7,6 +7,7 @@
 // item in "each" mode (result.subRuns). "Wait for sub-workflow" off: the sub-run still happens (synchronously here), its
 // errors do not reach the caller, and the node passes its input items on. Unknown workflow id = error (n8n: workflow not found).
 // Claude: https://api.anthropic.com/ must use the "Anthropic API" credential and nothing else may; opts.anthropic fakes it.
+// OpenRouter (W13 demo): https://openrouter.ai/ must use the "OpenRouter API" credential and nothing else may; opts.openrouter fakes it.
 // Also: Respond to Webhook (recorded in result.responses, items pass through), Loop Over Items (splitInBatches v3: output 0 =
 // done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
@@ -209,6 +210,16 @@ function simulate(wf, opts) {
                 if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
                 return { json: resp.fullResponse ? { statusCode: r.status, statusMessage: '', headers: {}, body: r.body } : r.body };
               }
+              if (/^https:\/\/openrouter\.ai\//.test(String(url))) {
+                if (credName !== 'OpenRouter API') throw new Error(`HTTP ${name}: OpenRouter called with credential "${credName}"`);
+                if (!opts.openrouter) throw new Error('sim: no fake OpenRouter (opts.openrouter)');
+                const headers = {};
+                if (p.sendHeaders) for (const hd of p.headerParameters.parameters) headers[hd.name] = resolve(hd.value, ctx);
+                const r = opts.openrouter(method, url, headers, body);   // { status, body } or throws (timeout / network)
+                if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
+                return { json: r.body };
+              }
+              if (credName === 'OpenRouter API') throw new Error(`HTTP ${name}: the OpenRouter credential used for ${url}`);
               if (/^https:\/\/api\.anthropic\.com\//.test(String(url))) {
                 if (credName !== 'Anthropic API') throw new Error(`HTTP ${name}: Claude called with credential "${credName}"`);
                 if (!opts.anthropic) throw new Error('sim: no fake Claude (opts.anthropic)');
