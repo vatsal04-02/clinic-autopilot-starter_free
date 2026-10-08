@@ -22,7 +22,7 @@ const last = (r) => (r.stdout || '').trim().split('\n').filter(Boolean).pop() ||
 let failed = 0;
 for (const [label, file] of Object.entries(FILES)) {
   for (const suite of ['integrated.test.js', 'existing-modules.test.js']) {
-    const r = sh(suite, { INTEGRATED_FILE: file });
+    const r = sh(suite, { INTEGRATED_FILE: file, INTEGRATED_LEGACY_NEEDS_HUMAN: '1' });   // both files predate the Needs_Human gate fix
     console.log(`  ${r.status === 0 ? 'ok  ' : 'FAIL'}  ${label.padEnd(6)} ${suite.padEnd(26)} ${last(r).trim()}`);
     if (r.status !== 0) failed++;
   }

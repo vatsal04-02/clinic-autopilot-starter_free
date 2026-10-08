@@ -50,7 +50,7 @@ n8n and every workflow depend on them. Change a name here first, then in the tem
 
 ### Conversations
 Lead (Reference → Leads), Phone, Last_Inbound_At (DateTime), Unread (Integer), Automation_Paused (Toggle), Assigned_To (Text),
-Needs_Human (Toggle — W13 ticks it when a person must answer; the AI stays silent until staff untick it),
+Needs_Human (Toggle — W13 ticks it when a person must answer. The AI stays off the handed-off message and anything older; a NEW patient message after the hand-off is handled by the AI again (and handed off again if needed). W13 never unticks it: staff untick it when done. Ticked by hand, without a hand-off from W13 = the AI stays silent),
 Handoff_Reason (Text — why, set by W13), Last_Intent (Text — the AI's reading of the last message, set by W13).
 W3, W5 and W6 read these (n8n/snippets/lead-context.js): Assigned_To / Needs_Human = a person owns it; Last_Intent not_interested / opt_out = no automated push;
 a pending cancel / reschedule request with Needs_Human holds W5's 24 h reminder.

@@ -262,6 +262,12 @@ function aiContext(raw, cfg, nowMs, h) {
   const answeredAfter = !dry && others.some((r) => r.fields.Direction === 'Out' && later(r));
   const newerInbound = !dry && others.some((r) => r.fields.Direction !== 'Out' && later(r));
   const aiRepliesLastHour = others.filter((r) => r.fields.Direction === 'Out' && /^W13/.test(String(r.fields.Sent_By || '')) && (Number(r.fields.Created_At) || 0) >= nowSec - 3600).length;
+  // The hand-off a ticked Conversations.Needs_Human waits on = the newest patient message W13 itself marked Needs_Human (handed
+  // off or failed). It keeps the AI away from that message and anything older; a patient message written AFTER it is answered
+  // again (and can be handed off again). No such message (ticked by hand, or older than the last 40) = the AI stays silent.
+  const at = (r) => Number(r.fields.Created_At) || 0;
+  const handoffMsg = others.filter((r) => r.fields.Direction !== 'Out' && r.fields.Needs_Human === true).sort((a, b) => at(b) - at(a) || b.id - a.id)[0] || null;
+  const afterHandoff = !dry && !!msg && !!handoffMsg && !later(handoffMsg);
   const history = aiHistory(others.filter((r) => !later(r)), msg ? msg.id : null, Number(cfg.history_limit) || 12);
 
   const apptRecs = recs(raw.appointments);
@@ -314,6 +320,7 @@ function aiContext(raw, cfg, nowMs, h) {
     opted_out: x.lead.opted_out,
     paused: cf.Automation_Paused === true,
     needs_human: cf.Needs_Human === true,
+    after_handoff: afterHandoff,
     answered_after: answeredAfter,
     newer_inbound: newerInbound,
     night: h.inQuietHours(nowMs) || h.inQuietHours(nowMs + 5 * 60000),
@@ -321,6 +328,7 @@ function aiContext(raw, cfg, nowMs, h) {
     ai_replies_last_hour: aiRepliesLastHour,
     max_per_hour: Number(cfg.max_ai_replies_per_hour) || 6,
   });
+  if (gate.route === 'ai' && cf.Needs_Human === true && afterHandoff) notes.push('new patient message after a hand-off: handled by the AI; Conversations > Needs_Human stays ticked until staff untick it');
   return { x, gate };
 }
 
@@ -334,7 +342,7 @@ function aiGates(c) {
   if (!c.dry_run && c.ai_mode === 'off') return { route: 'skip', reason: 'AI is off for this clinic (Settings ai_mode)', quiet: true };
   if (c.opted_out) return { route: 'skip', reason: 'the lead has opted out' };
   if (c.paused) return { route: 'skip', reason: 'automation is paused for this conversation (staff are handling it)' };
-  if (c.needs_human) return { route: 'skip', reason: 'this conversation is waiting for a person (untick Conversations > Needs_Human to let the AI answer again)' };
+  if (c.needs_human && !c.after_handoff) return { route: 'skip', reason: 'this conversation is waiting for a person and the patient has not written since (untick Conversations > Needs_Human to let the AI answer again)' };
   if (c.answered_after) return { route: 'skip', reason: 'the clinic already answered after this message' };
   if (c.newer_inbound) return { route: 'skip', reason: 'a newer message from this patient is answered instead' };
   const emergency = aiEmergencyIn(c.text);

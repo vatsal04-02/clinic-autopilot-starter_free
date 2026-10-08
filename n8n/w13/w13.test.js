@@ -264,7 +264,7 @@ test('5. CANCEL "Cancel my appointment tomorrow." -> the cancel link of THAT boo
   assert.deepStrictEqual([lastIn(x.g).AI_Status, lastIn(x.g).Needs_Human], ['failed', true]);
   assert(/not in the W12 allowlist/.test(lastIn(x.g).AI_Reason));
 });
-test('6. UNKNOWN question -> hand-off: holding reply + staff alert, Needs_Human; the next message waits for a person', (w) => {
+test('6. UNKNOWN question -> hand-off: holding reply + staff alert, Needs_Human; a NEW patient message is answered again; a hand tick keeps the AI silent', (w) => {
   const x = inbound('Do you accept the XYZ health insurance card?', { w13: w });
   clean(x);
   assert.deepStrictEqual(texts(x.meta), [
@@ -276,11 +276,16 @@ test('6. UNKNOWN question -> hand-off: holding reply + staff alert, Needs_Human;
   const n = inbound('Do you accept the XYZ health insurance card?', { w13: w, from: P_NEW });
   clean(n);
   assert.deepStrictEqual([leadOf(n.g, `+${P_NEW}`).Status, leadOf(n.g, `+${P_NEW}`).First_Response_At], ['New', undefined], 'a hand-off is not a real answer: the lead stays New so W3 keeps chasing staff');
-  const y = inbound('Hello??', { w13: w, g: x.g, meta: x.meta, claude: x.claude, ts: F.sec(F.NOW) + 60, now: F.NOW + 120000 });
+  // a NEW patient message after the hand-off is answered again; Needs_Human and the hand-off reason stay for staff
+  const y = inbound('How much does this cost?', { w13: w, g: x.g, meta: x.meta, claude: x.claude, ts: F.sec(F.NOW) + 60, now: F.NOW + 120000 });
   clean(y);
-  assert.strictEqual(x.meta.calls.length, 2, 'no AI reply while a person is needed');
-  assert.strictEqual(x.claude.calls.length, 1, 'Claude is not even asked');
-  assert.deepStrictEqual([lastIn(x.g).AI_Status, lastIn(x.g).AI_Reason], ['skipped', 'this conversation is waiting for a person (untick Conversations > Needs_Human to let the AI answer again)']);
+  assert.deepStrictEqual([x.claude.calls.length, x.meta.calls.length, lastIn(x.g).AI_Status, lastIn(x.g).Needs_Human], [2, 3, 'replied', false]);
+  assert.deepStrictEqual([conv(x.g, F.ASHA).Needs_Human, conv(x.g, F.ASHA).Handoff_Reason], [true, 'question not covered by the knowledge base']);
+  // Needs_Human ticked BY HAND (no hand-off message from W13): the AI stays silent, as before
+  const manual = inbound('How much does this cost?', { w13: w, crm: { convs: [{ id: 1, fields: { ...F.conversationRows()[0].fields, Needs_Human: true } }] } });
+  clean(manual);
+  assert.deepStrictEqual([manual.claude.calls.length, manual.meta.calls.length, lastIn(manual.g).AI_Status], [0, 0, 'skipped']);
+  assert(/waiting for a person/.test(lastIn(manual.g).AI_Reason));
 });
 test('7. RETURNING lead after 5 days -> earlier conversation + summary in the prompt, KB price, booking link', (w) => {
   const x = inbound('Hi again, is the knee treatment price still the same?', { w13: w });
@@ -431,7 +436,8 @@ if (!process.env.W13_NO_MUTATIONS) {
     'low confidence is accepted': (w) => code(w, 'W13 – Plan', 'if (d.confidence < tLow)', 'if (false)'),
     'invented slots are not replaced': (w) => code(w, 'W13 – Plan', 'if (aiTimesIn(plan.reply).some((readings) => !readings.some((m) => okTimes.has(m) || m === x.slots.open || m === x.slots.close))) {', 'if (false) {'),
     'the message is not claimed (re-runs reply again)': (w) => code(w, 'W13 – Build Context', "if (!c.dry_run && c.ai_status && !(c.retry && c.ai_status === 'deferred'))", 'if (false)'),
-    'Needs_Human is ignored': (w) => code(w, 'W13 – Build Context', 'if (c.needs_human)', 'if (false)'),
+    'Needs_Human is ignored': (w) => code(w, 'W13 – Build Context', 'if (c.needs_human && !c.after_handoff)', 'if (false)'),
+    'Needs_Human never lets a new message through': (w) => code(w, 'W13 – Build Context', 'if (c.needs_human && !c.after_handoff)', 'if (c.needs_human)'),
     'quiet hours are ignored': (w) => code(w, 'W13 – Build Context', "if (!c.dry_run && c.night) return { route: 'defer'", "if (false) return { route: 'defer'"),
     'STOP is not honoured': (w) => code(w, 'W13 – Build Context', 'if (AI_STOP_WORDS.test(c.text || \'\'))', 'if (false)'),
     'AI is on by default': (w) => code(w, 'W13 – Build Context', "ai_mode: ['draft', 'auto'].includes(mode) ? mode : 'off'", "ai_mode: 'auto'"),

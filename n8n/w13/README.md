@@ -159,7 +159,12 @@ Reliability checks that pass:
     - With TEST_MODE on, every reply goes to TEST_PHONE, which must also be in W12's allowlist.
     - When you are happy, switch TEST_MODE off for that clinic. This is your decision: nothing here turns TEST_MODE off, and W12 stays `send_mode = allowlist`.
 
-When the AI hands a conversation to a person, staff answer from the Grist Inbox, then untick `Conversations > Needs_Human` to let the AI answer that patient again.
+When the AI hands a conversation to a person, `Conversations > Needs_Human` is ticked and the hand-off reason is in `Handoff_Reason`.
+- The AI never touches the handed-off message again: re-runs, Meta re-deliveries and the 08:05 retry all skip it.
+- A **new** message from the patient after the hand-off is handled by the AI again, through every gate (STOP, opted out, paused, duplicates, night, media, rate limit, confidence, medical / payment / complaint → person).
+- If that new message needs a person too, it is handed off again: a new staff alert, `Needs_Human` set again, `Handoff_Reason` = the new reason.
+- W13 never unticks `Needs_Human`; staff untick it when the issue is dealt with.
+- To keep the AI quiet while staff talk to the patient, tick `Automation_Paused`. A `Needs_Human` ticked by hand, with no hand-off from W13, also keeps the AI silent.
 
 ## 5. Limitations and open points (please decide)
 

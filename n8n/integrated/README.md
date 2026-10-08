@@ -114,7 +114,7 @@ The other 193 nodes and 152 connections are byte-identical to your export, inclu
 | 3 | availability: only real free evening slots; an invented time is replaced | pass |
 | 4 | booking: link mode (Cal.com link for that day), direct mode (Appointments row, lead Booked), taken slot (real alternatives) | pass |
 | 5 | cancellation: Cal.com cancel link of that booking | pass |
-| 6 | unknown question → hand-off: holding reply + `human_handoff_alert`, both via W12; Needs_Human; AI silent afterwards | pass |
+| 6 | unknown question → hand-off: holding reply + `human_handoff_alert`, both via W12; Needs_Human; a new patient message is answered again | pass |
 | 7 | duplicate inbound: stored once, one AI job, one reply; two messages in one webhook = one job each | pass |
 | 8 | invalid payload (400), delivery receipt, unknown clinic, bad number: no AI job, nothing sent | pass |
 | 9 | AI failure (timeout, 429, malformed, schema-breaking): hand-off, nothing invented sent | pass |
@@ -185,3 +185,12 @@ The full change, test and security report is in **`AI-CONTEXT-REPORT.md`**. In s
 | `ai-context-mutations.test.js` | Breaks each new rule once (15 breakages); the system test must catch every one. |
 | `ai-context-regression.test.js` | The existing suites before vs after; only the 2 intended A5 / A6 differences are allowed. |
 | `redact.js` | The redaction used for public copies. |
+
+## 8. W13 Needs_Human gate fix
+
+A ticked `Needs_Human` used to skip every later patient message until staff unticked it.
+- **Now:** it keeps the AI away from the handed-off message only (and anything older). A new patient message is handled again, and is handed off again if needed. Details are in `n8n/w13/README.md`; the results are in `HANDOFF-GATE-REPORT.md`.
+- `apply-handoff-gate.js` applies the fix to the workflow from section 7. It is fingerprint-checked and changes only the 4 W13 nodes that hold the decision module.
+- `validate-handoff-gate.js` proves nothing else changed.
+- `handoff-gate.test.js` covers the 7 requested cases.
+- `handoff-gate-regression.test.js` runs every existing suite on the result.

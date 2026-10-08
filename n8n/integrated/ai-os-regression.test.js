@@ -12,7 +12,9 @@ const FILES = {
 let failed = 0;
 for (const [label, file] of Object.entries(FILES)) {
   for (const suite of ['integrated.test.js', 'existing-modules.test.js']) {
-    const r = spawnSync(process.execPath, [path.join(__dirname, suite)], { encoding: 'utf8', env: { ...process.env, INTEGRATED_FILE: file } });
+    // the original export predates the Needs_Human gate fix (handoff-gate.test.js): test 6 checks its old behaviour there
+    const legacy = label === 'original' ? { INTEGRATED_LEGACY_NEEDS_HUMAN: '1' } : {};
+    const r = spawnSync(process.execPath, [path.join(__dirname, suite)], { encoding: 'utf8', env: { ...process.env, INTEGRATED_FILE: file, ...legacy } });
     const last = (r.stdout || '').trim().split('\n').filter(Boolean).pop() || '';
     console.log(`  ${r.status === 0 ? 'ok  ' : 'FAIL'}  ${label.padEnd(8)} ${suite.padEnd(26)} ${last.trim()}`);
     if (r.status !== 0) { failed++; console.log(r.stdout.split('\n').filter((l) => /FAIL|MISSED/.test(l)).join('\n')); }

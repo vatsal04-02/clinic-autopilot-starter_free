@@ -166,15 +166,17 @@ test('5. CANCELLATION "Cancel my appointment tomorrow.": the Cal.com cancel link
   assert.deepStrictEqual(texts(x.meta), [`${P_ASHA}: No problem. You can cancel your appointment on Wed 07 Oct 10:00 AM with this link: https://cal.com/booking/cal-uid-asha-1?cancel=true`]);
   assert.strictEqual(lastIn(x.g).AI_Action, 'cancel_link');
 });
-test('6. UNKNOWN question -> HUMAN HANDOFF: holding reply + human_handoff_alert to the owner, BOTH through W12; Needs_Human; AI silent afterwards', () => {
+test('6. UNKNOWN question -> HUMAN HANDOFF: holding reply + human_handoff_alert to the owner, BOTH through W12; Needs_Human; a new patient message is answered again', () => {
   const x = post('Do you accept the XYZ health insurance card?');
   clean(x);
   assert.deepStrictEqual(texts(x.meta), [`${P_ASHA}: ${HOLD}`, `${OWNER.slice(1)}: [human_handoff_alert] Demo Physio | Asha Patel | ${F.ASHA} | question not covered by the knowledge base`]);
   assert.strictEqual(x.sends.length, 2, 'two W12 runs (patient + staff)');
   assert.deepStrictEqual([lastIn(x.g).AI_Status, conv(x.g, F.ASHA).Needs_Human, conv(x.g, F.ASHA).Handoff_Reason], ['handed_off', true, 'question not covered by the knowledge base']);
-  const y = post('Hello??', { g: x.g, meta: x.meta, claude: x.claude, ts: F.sec(F.NOW) + 60, now: F.NOW + 120000 });
+  const y = post('How much does this cost?', { g: x.g, meta: x.meta, claude: x.claude, ts: F.sec(F.NOW) + 60, now: F.NOW + 120000 });
   clean(y);
-  assert.deepStrictEqual([x.meta.calls.length, x.claude.calls.length, lastIn(x.g).AI_Status], [2, 1, 'skipped']);
+  // INTEGRATED_LEGACY_NEEDS_HUMAN: set by the regression runners ONLY for workflow files from before the Needs_Human gate fix
+  if (process.env.INTEGRATED_LEGACY_NEEDS_HUMAN) assert.deepStrictEqual([x.meta.calls.length, x.claude.calls.length, lastIn(x.g).AI_Status], [2, 1, 'skipped']);
+  else assert.deepStrictEqual([x.meta.calls.length, x.claude.calls.length, lastIn(x.g).AI_Status, conv(x.g, F.ASHA).Needs_Human], [3, 2, 'replied', true]);
 });
 test('7. DUPLICATE inbound (same WA_Message_ID twice): stored once, ONE AI job, ONE reply', () => {
   const x = post('How much does this cost?', { id: 'wamid.DUP.1' });

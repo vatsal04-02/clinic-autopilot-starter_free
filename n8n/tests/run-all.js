@@ -14,6 +14,7 @@ const files = [
   path.join(root, 'integrated', 'validate-integrated.js'),
   path.join(root, 'integrated', 'validate-ai-os.js'),
   path.join(root, 'integrated', 'validate-ai-context.js'),
+  path.join(root, 'integrated', 'validate-handoff-gate.js'),
   ...fs.readdirSync(path.join(root, 'integrated')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'integrated', f)),
 ];
 
