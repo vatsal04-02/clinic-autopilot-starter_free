@@ -11,7 +11,9 @@ const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] :
 const PRIVATE = args.includes('--private');
 const ORIG = arg('--orig', path.join(__dirname, 'ai-updated-workflow-clinic.ai-context.json'));
 const PATCHED = arg('--patched', path.join(__dirname, 'ai-updated-workflow-clinic.handoff-gate.json'));
-const DEMO = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'w13', 'W13-AI-Receptionist-Demo-OpenRouter.json'), 'utf8'));
+const crypto = require('crypto');
+const sha = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
+const RESULTS = { 'W13 – Build Context': '2aeef88590ada56c', 'W13 – Plan': 'e37398352961807e', 'W13 – Plan Ready': 'be94a1e0dcdc3c2e', 'W13 – Record Sends': 'bd781a8125518c60' };   // the W13 build of commit 8be1676
 const orig = JSON.parse(fs.readFileSync(ORIG, 'utf8'));
 const patched = JSON.parse(fs.readFileSync(PATCHED, 'utf8'));
 const A = Object.fromEntries(orig.nodes.map((n) => [n.name, n]));
@@ -38,7 +40,7 @@ group('2. nodes: 0 added, 0 removed; exactly the 4 W13 nodes holding the decisio
     const a = JSON.parse(JSON.stringify(A[n])); const b = JSON.parse(JSON.stringify(B[n]));
     delete a.parameters.jsCode; delete b.parameters.jsCode;
     must(same(a, b), `${n}: more than its code changed`);
-    must(B[n].parameters.jsCode === DEMO.nodes.find((d) => d.name === n).parameters.jsCode, `${n}: not the rebuilt W13 code`);
+    must(sha(B[n].parameters.jsCode) === RESULTS[n], `${n}: not the W13 code of commit 8be1676`);
   }
   return `${orig.nodes.length - CHANGED.length} of ${orig.nodes.length} nodes byte-identical`;
 });

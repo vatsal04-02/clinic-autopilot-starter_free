@@ -8,9 +8,14 @@
 
 const AI_INTENTS = ['greeting', 'services_info', 'pricing', 'location_hours', 'availability_check', 'book_appointment',
   'reschedule_appointment', 'cancel_appointment', 'appointment_status', 'follow_up_later', 'not_interested', 'thanks_ack',
-  'complaint', 'human_request', 'payment_issue', 'medical_question', 'other'];
+  'complaint', 'human_request', 'payment_issue', 'medical_question', 'outcome_better', 'outcome_same', 'outcome_worse', 'other'];
 const AI_ACTIONS = ['reply', 'offer_slots', 'book_slot', 'cancel_appointment', 'reschedule_appointment', 'schedule_follow_up', 'handoff', 'no_reply'];
-const AI_HUMAN_INTENTS = ['complaint', 'human_request', 'payment_issue', 'medical_question'];   // always a human, whatever the model says
+const AI_HUMAN_INTENTS = ['complaint', 'human_request', 'payment_issue', 'medical_question', 'outcome_same', 'outcome_worse'];   // always a human, whatever the model says
+// How a hand-off reason names these intents (the rest: the intent with spaces). Outcome = the patient's answer to W7's check-in.
+const AI_INTENT_LABELS = { outcome_same: 'no improvement after the visit', outcome_worse: 'feels worse after the visit' };
+// A staff member wrote to the patient (a Messages row Direction Out that no automation wrote, e.g. a W10 reply) less than this
+// before the patient's message: the conversation is theirs and the AI stays out (it comes back this long after their last message).
+const AI_STAFF_WINDOW_SEC = 24 * 3600;
 const AI_STAGES = ['cold', 'warm', 'hot'];
 const AI_SENTIMENTS = ['positive', 'neutral', 'negative'];
 const AI_WINDOWS = { morning: [8 * 60, 12 * 60], afternoon: [12 * 60, 16 * 60], evening: [16 * 60, 21 * 60] };
@@ -25,9 +30,9 @@ const AI_WORKFLOW = 'W13-ai-receptionist';
 const AI_PRIORITIES = ['urgent', 'high', 'normal'];
 const AI_RISK_FLAGS = ['emergency', 'complaint', 'payment', 'medical', 'legal', 'abusive', 'sensitive'];
 // Confidence tiers (A4): between min_confidence and confidence_auto only these informational answers may go out on their own.
-const AI_INFO_INTENTS = ['greeting', 'services_info', 'pricing', 'location_hours', 'availability_check', 'appointment_status', 'thanks_ack'];
+const AI_INFO_INTENTS = ['greeting', 'services_info', 'pricing', 'location_hours', 'availability_check', 'appointment_status', 'thanks_ack', 'outcome_better'];
 const AI_INFO_ACTIONS = ['reply', 'offer_slots', 'no_reply'];
-const AI_NO_REPLY_INTENTS = ['thanks_ack', 'not_interested'];   // no_reply for anything else = a person answers (live rule, A1)
+const AI_NO_REPLY_INTENTS = ['thanks_ack', 'not_interested', 'outcome_better'];   // no_reply for anything else = a person answers (live rule, A1)
 // Deterministic emergency check (A3), before any AI. Only unambiguous phrases: stroke, paralysis, fracture or accident are
 // everyday physio rehab topics and would raise false URGENT alerts (the model can still flag them as risks).
 const AI_EMERGENCY = /\b(chest pain|heart attack|can'?t breathe|cannot breathe|unable to breathe|difficulty (in )?breathing|not breathing|unconscious|fainted|passed out|collapsed|heavy bleeding|bleeding heavily|severe bleeding|bleeding a lot|suicid\w*|kill myself|end my life|self[- ]harm|medical emergency|(it'?s|this is) an emergency|emergency hai|seene me(in)? dard|chhati me(in)? dard|saans (nahi|nahin|lene me(in)?)|behosh|aatmahatya)\b|सीने में दर्द|छाती में दर्द|सांस नहीं|साँस नहीं|बेहोश|आत्महत्या/i;
@@ -268,6 +273,9 @@ function aiContext(raw, cfg, nowMs, h) {
   const at = (r) => Number(r.fields.Created_At) || 0;
   const handoffMsg = others.filter((r) => r.fields.Direction !== 'Out' && r.fields.Needs_Human === true).sort((a, b) => at(b) - at(a) || b.id - a.id)[0] || null;
   const afterHandoff = !dry && !!msg && !!handoffMsg && !later(handoffMsg);
+  // A staff member's own message (Direction Out, not written by an automation "W<n>-...") in the 24 h before this one.
+  const staffMsg = others.find((r) => r.fields.Direction === 'Out' && !/^W\d+(?!\w)/.test(String(r.fields.Sent_By || '').trim()) && !later(r) && at(r) > 0 && at(r) >= ts - AI_STAFF_WINDOW_SEC) || null;
+  const staffActive = !dry && !!msg && !!staffMsg;
   const history = aiHistory(others.filter((r) => !later(r)), msg ? msg.id : null, Number(cfg.history_limit) || 12);
 
   const apptRecs = recs(raw.appointments);
@@ -323,6 +331,7 @@ function aiContext(raw, cfg, nowMs, h) {
     after_handoff: afterHandoff,
     answered_after: answeredAfter,
     newer_inbound: newerInbound,
+    staff_active: staffActive,
     night: h.inQuietHours(nowMs) || h.inQuietHours(nowMs + 5 * 60000),
     msg_type: st.msg_type ? String(st.msg_type) : (media ? 'media' : 'text'),   // W2 says the type; a morning retry reads it from the Body
     ai_replies_last_hour: aiRepliesLastHour,
@@ -350,6 +359,7 @@ function aiGates(c) {
     return { route: 'handoff', reason: `possible emergency ("${emergency}")`,
       triage: { priority: 'urgent', flags: ['emergency'], note: aiStaffNote(`Possible emergency ("${emergency}"). Patient wrote: "${aiLine(c.text, 120)}". Contact the patient now.`) } };
   }
+  if (c.staff_active) return { route: 'skip', reason: 'a staff member is talking to this patient (they wrote in the last 24 h): the AI stays out' };
   if (!c.dry_run && c.night) return { route: 'defer', reason: 'quiet hours (21:00-08:00 IST): answered by the 08:05 run' };
   if (!['text', 'button', 'interactive'].includes(c.msg_type)) return { route: 'handoff', reason: `the patient sent a ${c.msg_type} message; the AI only reads text` };
   if (!aiClean(c.text, 10)) return { route: 'skip', reason: 'empty message' };
@@ -387,6 +397,8 @@ const AI_RULES = [
   '- For "handoff" and "no_reply" the reply may be empty; the system sends its own message.',
   '',
   'Triage (for the clinic staff): priority urgent = a possible emergency or danger to health or safety; high = complaint, angry patient, payment or refund dispute, medical question, legal threat, or the patient insists on a person; normal = everything else. risk_flags = every one of emergency, complaint, payment, medical, legal, abusive, sensitive that applies (empty list if none): any flag means a person answers. staff_note = at most 200 characters for the staff: what the patient wants and the recommended next step (for example "Unhappy with yesterday\'s session, wants the doctor to call. Suggest: call today."), no links or phone numbers. Fill priority, staff_note and risk_flags for every message.',
+  '',
+  'Outcome check: if RECENT CONVERSATION shows the clinic asked how the patient feels after a visit and this message answers it, use intent outcome_better (improved), outcome_same (no change) or outcome_worse (worse, more pain, a new problem). outcome_same and outcome_worse: action "handoff" (a person follows up; never give medical advice). outcome_better: a short warm thank-you (or no_reply). If they ask for another appointment, use book_appointment or availability_check instead; if they ask for a person, human_request.',
   '',
   'Other fields: lead_stage hot = wants to book now, warm = interested or asking questions, cold = not interested or unclear. lead_summary = one or two sentences on what this patient wants so far (no medical details beyond their own words). kb_refs = the K-numbers you used. likely_service = a service title exactly as written in the knowledge base, or null. language = the language of the patient\'s message.',
   '',
@@ -606,6 +618,9 @@ function aiPlan(d, x, cfg) {
   plan.action = d.action;
   plan.confidence = d.confidence;
   plan.triage = aiTriage(d);
+  if (d.intent === 'outcome_worse') {   // worse after a visit: always a person, at least HIGH, flagged medical; never advice by message
+    plan.triage = { priority: plan.triage.priority === 'urgent' ? 'urgent' : 'high', flags: [...new Set([...plan.triage.flags, 'medical'])], note: plan.triage.note || 'Patient says they feel worse after the visit. Suggest: a clinician calls them today (no advice by message).' };
+  }
 
   // what we learn about the lead, whatever happens next
   plan.lead_patch.Lead_Stage = d.lead_stage;
@@ -619,8 +634,8 @@ function aiPlan(d, x, cfg) {
   // A3: urgent or any risk flag -> always a person
   if (plan.triage.priority === 'urgent') return handoff(d.handoff_reason || `urgent ${d.intent.replace(/_/g, ' ')}`);
   if (plan.triage.flags.length) return handoff(d.handoff_reason || `risk: ${plan.triage.flags.join(', ')}`);
-  if (d.needs_human || d.action === 'handoff') return handoff(d.handoff_reason || `intent ${d.intent}`);
-  if (AI_HUMAN_INTENTS.includes(d.intent)) return handoff(`${d.intent.replace(/_/g, ' ')}${d.handoff_reason ? `: ${d.handoff_reason}` : ''}`);
+  if (d.needs_human || d.action === 'handoff') return handoff(AI_INTENT_LABELS[d.intent] ? `${AI_INTENT_LABELS[d.intent]}${d.handoff_reason ? `: ${d.handoff_reason}` : ''}` : (d.handoff_reason || `intent ${d.intent}`));
+  if (AI_HUMAN_INTENTS.includes(d.intent)) return handoff(`${AI_INTENT_LABELS[d.intent] || d.intent.replace(/_/g, ' ')}${d.handoff_reason ? `: ${d.handoff_reason}` : ''}`);
   // A4: confidence tiers. < min_confidence: a person. Below confidence_auto: informational answers only. Negative mood:
   // informational answers only. Appointment changes (writes) need confidence_write, checked after routing below.
   const tLow = aiNum(cfg.min_confidence, 0.65);
@@ -907,7 +922,7 @@ function aiFinalWrites(plan, x, sends, nowSec, trace) {
 
 if (typeof module !== 'undefined') {
   module.exports = {
-    AI_INTENTS, AI_ACTIONS, AI_HUMAN_INTENTS, AI_DECISION_SCHEMA, AI_RULES, AI_WINDOWS, AI_STOP_WORDS, AI_WORKFLOW,
+    AI_INTENTS, AI_ACTIONS, AI_HUMAN_INTENTS, AI_INTENT_LABELS, AI_STAFF_WINDOW_SEC, AI_DECISION_SCHEMA, AI_RULES, AI_WINDOWS, AI_STOP_WORDS, AI_WORKFLOW,
     AI_PRIORITIES, AI_RISK_FLAGS, AI_INFO_INTENTS, AI_INFO_ACTIONS, AI_NO_REPLY_INTENTS, AI_EMERGENCY, aiNum, aiStaffNote, aiEmergencyIn, aiTriage, aiTraceText,
     aiClean, aiLine, aiIst, aiIstMs, aiDayLabel, aiHHMM, ai12h, aiSettings, aiProfile, aiKnowledge, aiCalendar, aiFreeSlots,
     aiLeadAppointments, aiHistory, aiContext, aiGates, aiClinicFacts, aiFacts, aiBuildRequest, aiParseResponse, aiValidateDecision,

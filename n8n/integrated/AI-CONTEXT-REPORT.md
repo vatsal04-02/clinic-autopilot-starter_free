@@ -78,7 +78,7 @@ W5  Reminders         every 15 min → Appointments (Booked) + LEADS + Conversat
                       → lead-context (24 h hold only) → W5 – Decide send → W12 → flag + Run_Log
 W6  Follow-ups        10:00 → Appointments + LEADS + Conversations → day-2 window / no-show lookback (deterministic)
                       → lead-context (hold / hot first) → W6 – Decide send (opted out, paused, quiet hours) → W12 → flag + Run_Log
-W11 Errors            Error Trigger → masked Telegram alert (phones → [number], tokens → [hidden]).  ⚠ not wired (see 8)
+W11 Errors            Error Trigger → masked Telegram alert (phones → [number], tokens → [hidden]). Wired: n8n runs this workflow's own Error Trigger (correction, see 7)
 W12 Only sender       allowlist · quiet hours 21:00-08:00 · TEST_MODE → TEST_PHONE · 24 h window for free text → Meta → inbox log
 ```
 
@@ -113,7 +113,7 @@ All runs happen in the simulator: a fake Grist that checks columns and choices, 
 | W1.2 | duplicate lead | PASS | same form twice: one lead, second logged "skipped" |
 | W1.3 | invalid lead (bot / honeypot) | PASS | honeypot filled: no lead, Run_Log skipped |
 | W1.4 | invalid lead (bad phone number) | PASS | no lead; Run_Log skipped "invalid phone" (checked in W1 – Resolve clinic) |
-| W1.5 | unknown clinic | PASS | stops at W1 – Unknown clinic (error -> W11 when it is wired) |
+| W1.5 | unknown clinic | PASS | stops at W1 – Unknown clinic (a production run then triggers W11, this workflow's own Error Trigger) |
 
 **W2 WhatsApp inbound**
 
@@ -299,7 +299,7 @@ Credentials changed: 0
 
 | Finding | Detail |
 |---|---|
-| ⚠ W11 is not wired | `settings.errorWorkflow` is empty, so a failure in this workflow never triggers its own W11. Fix it in n8n: Workflow Settings → Error workflow → this workflow. Not changed here: it is a settings change. |
+| ~~⚠ W11 is not wired~~ (**corrected 8 Oct, W7-W10 report**) | This finding was wrong. With `settings.errorWorkflow` empty, n8n runs the failed workflow's OWN Error Trigger, so W11 does fire on a failed production run of this workflow (Section 00 says so too: "Settings > Error workflow stays EMPTY"). Nothing to change. |
 | ⚠ `W13 – Ask Model` → `allowUnauthorizedCerts: true` | TLS certificate checks are off for the OpenRouter call. Recommended: switch it off. Not changed (security configuration). |
 | ⚠ W2 does not verify Meta's `X-Hub-Signature-256` | Anyone who knows the URL can post a fake inbound message. |
 | `W4 – Webhook` (path `cal-w4-test`) | Unconnected, but it registers a live URL when the workflow is active. Harmless, since it does nothing, but it can be deleted. |

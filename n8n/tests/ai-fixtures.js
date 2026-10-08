@@ -63,7 +63,14 @@ function fakeDecide(req) {
   const dateOf = (word) => { const m = facts.match(new RegExp(`^- (\\d{4}-\\d{2}-\\d{2}) = [^\\n]*${word}`, 'mi')); return m ? m[1] : null; };
   const freeOn = (date) => { const m = facts.match(new RegExp(`^- ${date} \\([^)]*\\): ([^\\n]*)`, 'm')); return m ? m[1].split(', ') : []; };
 
-  if (/services|what do you (do|offer)/i.test(text)) {
+  const outcomeAsked = /How are you feeling/i.test((facts.match(/RECENT CONVERSATION[\s\S]*/) || [''])[0]);   // W7's check-in is in the history
+  if (outcomeAsked && /\b(worse|more pain|pain has increased)\b/i.test(text)) {
+    Object.assign(d, { intent: 'outcome_worse', action: 'handoff', needs_human: true, sentiment: 'negative', handoff_reason: 'feels worse after the session', reply: '' });
+  } else if (outcomeAsked && /\b(same as before|no change|still the same)\b/i.test(text)) {
+    Object.assign(d, { intent: 'outcome_same', action: 'handoff', needs_human: true, handoff_reason: 'no change yet', reply: '' });
+  } else if (outcomeAsked && /\b(better|much better|feeling good)\b/i.test(text) && !/book|appointment/i.test(text)) {
+    Object.assign(d, { intent: 'outcome_better', action: 'reply', sentiment: 'positive', reply: 'So glad to hear you are feeling better! Thank you for letting us know.', lead_summary: 'Feeling better after the visit.' });
+  } else if (/services|what do you (do|offer)/i.test(text)) {
     const services = [...facts.matchAll(/^\[K\d+\] \(services\) ([^:]+):/gm)].map((m) => m[1]);
     Object.assign(d, { intent: 'services_info', reply: `Hi! We offer ${services.join(' and ')}. Would you like to book a first assessment?`, kb_refs: ['K1', 'K2'], lead_summary: 'New enquiry about services.' });
   } else if (/how much|cost|charges|kitne|price/i.test(text) && /knee/i.test(facts.match(/RECENT CONVERSATION[\s\S]*/)[0]) && /again|still/i.test(text)) {

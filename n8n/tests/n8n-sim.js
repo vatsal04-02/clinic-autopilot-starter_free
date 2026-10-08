@@ -12,7 +12,7 @@
 // done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
   Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes', 'Lead_Stage'],
-  Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent'],
+  Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent', 'Outcome_Sent'],
   Run_Log: ['Workflow', 'Record', 'Outcome', 'Error', 'At'],
   Clinics: ['Clinic_Slug', 'Clinic_Name', 'Grist_Doc_ID', 'WA_Phone_Number_ID', 'Active'],
   Settings: ['Key', 'Value'],
@@ -32,7 +32,7 @@ const CHOICES = {
   'Leads.Lead_Stage': ['cold', 'warm', 'hot'],
   'Knowledge.Category': ['services', 'pricing', 'hours', 'location', 'policy', 'faq', 'general'],
 };
-const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
+const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Appointments.Outcome_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
 const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused', 'Messages.Send',
   'Conversations.Needs_Human', 'Messages.Needs_Human', 'Knowledge.Active']);
 

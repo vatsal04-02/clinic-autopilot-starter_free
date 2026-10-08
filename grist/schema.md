@@ -43,15 +43,23 @@ n8n and every workflow depend on them. Change a name here first, then in the tem
 | End | DateTime | |
 | Status | Choice | Booked, Rescheduled, Cancelled, Completed, No-show |
 | Fee_INR | Numeric | hidden from front desk by access rule |
-| R24_Sent, R2_Sent, Rebook_Sent, Review_Sent | DateTime | set by n8n |
+| R24_Sent, R2_Sent, Rebook_Sent, Review_Sent | DateTime | set by n8n (Review_Sent: W8, the review request) |
+| Outcome_Sent | DateTime | set by W7 (outcome check-in). **Added for W7: create it by hand** (DateTime, Asia/Kolkata). Without it W7 sends nothing (its claim write fails, W11 alerts) |
 | Week | Formula | `$Start.date() - datetime.timedelta(days=$Start.weekday())` |
 | Showed | Formula | `$Status == "Completed"` |
 | No_Show | Formula | `$Status == "No-show"` |
 
+Staff set Status to **Completed** or **No-show** after each visit (Cal.com only knows Booked / Cancelled / Rescheduled): W6 (no-show
+rebook), W7 (check-in), W8 (review request) and W9 (report) read it. W9's report lists past visits still marked Booked.
+
 ### Conversations
 Lead (Reference → Leads), Phone, Last_Inbound_At (DateTime), Unread (Integer), Automation_Paused (Toggle), Assigned_To (Text),
 Needs_Human (Toggle — W13 ticks it when a person must answer. The AI stays off the handed-off message and anything older; a NEW patient message after the hand-off is handled by the AI again (and handed off again if needed). W13 never unticks it: staff untick it when done. Ticked by hand, without a hand-off from W13 = the AI stays silent),
-Handoff_Reason (Text — why, set by W13), Last_Intent (Text — the AI's reading of the last message, set by W13).
+Handoff_Reason (Text — why, set by W13), Last_Intent (Text — the AI's reading of the last message, set by W13; outcome_better /
+outcome_same / outcome_worse = the patient's answer to W7's check-in).
+A staff reply (a Messages row Direction Out whose Sent_By is a person, i.e. not "W5-reminders", "W13-ai-receptionist"... ) keeps
+W13 out of the conversation for 24 h; STOP and emergency words still work. W10 never changes Needs_Human, Assigned_To or
+Automation_Paused; it sets Unread = 0 after a staff reply goes out.
 W3, W5 and W6 read these (n8n/snippets/lead-context.js): Assigned_To / Needs_Human = a person owns it; Last_Intent not_interested / opt_out = no automated push;
 a pending cancel / reschedule request with Needs_Human holds W5's 24 h reminder.
 
@@ -60,10 +68,17 @@ Conversation (Reference → Conversations), Direction (Choice: In, Out), Body (T
 WA_Message_ID (Text, unique), Status (Choice: Received, queued, needs_template, sent, delivered, read, failed — W2 stores patient messages as Received),
 Send (Toggle — the webhook's "ready" column), Created_At (DateTime)
 
+**Staff reply (W10, every minute):** in the Inbox add a row in the patient's conversation: Direction = Out, Body = the reply,
+Template empty, then tick **Send**. W10 claims the row first (Send unticked, Status queued, Sent_By = "Staff" and Created_At = now
+if empty), sends it through W12 as free text, then writes Status = sent + WA_Message_ID, or Status failed / needs_template with
+the reason in AI_Reason (Send stays unticked: fix it and tick again). Quiet hours: the row waits, ticked, and goes at 08:00.
+Opted_Out, an invalid phone, an empty body or a last patient message older than 24 h (WhatsApp only allows templates then) stop
+it with the reason on the row. Rows written by W12 / W13 have Send = false and are never sent again.
+
 Set by W13 (AI receptionist) on the patient's message (Direction In) — the conversation memory and its audit trail:
 | Column | Type | Notes |
 |---|---|---|
-| Intent | Text | greeting, services_info, pricing, location_hours, availability_check, book_appointment, reschedule_appointment, cancel_appointment, appointment_status, follow_up_later, not_interested, thanks_ack, complaint, human_request, payment_issue, medical_question, other (opt_out for STOP) |
+| Intent | Text | greeting, services_info, pricing, location_hours, availability_check, book_appointment, reschedule_appointment, cancel_appointment, appointment_status, follow_up_later, not_interested, thanks_ack, complaint, human_request, payment_issue, medical_question, outcome_better, outcome_same, outcome_worse (answers to W7's check-in), other (opt_out for STOP) |
 | AI_Action | Text | what W13 did: reply, offer_slots, book_slot, cancel_link, reschedule_link, cancelled, rescheduled, follow_up, handoff, no_reply, skip, opt_out, defer, failed |
 | AI_Confidence | Numeric | 0–1, from the AI |
 | AI_Status | Choice | processing, replied, drafted, handed_off, no_reply, skipped, opted_out, deferred, failed. **Empty = not handled yet**; W13 sets `processing` before it asks the AI (no double replies) |
@@ -85,7 +100,8 @@ Example rows: `n8n/w13/knowledge-base.sample.csv` (fake demo data: replace with 
 ### Settings
 Key (Text), Value (Text). Rows: clinic_name, open_time, close_time, working_days, owner_phone,
 staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE,
-ai_mode, booking_mode, slot_minutes, booking_capacity, booking_notice_minutes, handoff_reply (W13, all optional)
+ai_mode, booking_mode, slot_minutes, booking_capacity, booking_notice_minutes, handoff_reply (W13, all optional),
+outcome_checkin, review_requests, weekly_report_whatsapp (W7, W8, W9; optional, missing = off)
 
 How the workflows read the values:
 - `open_time`, `close_time`: 24-hour `09:00`, `19:30` (`9:00 AM` also works). Missing or unreadable = 08:00-21:00.
@@ -96,11 +112,20 @@ How the workflows read the values:
 - `ai_mode` (W13): `off` (default, also when missing), `draft` (the AI decides and writes the CRM; the reply waits in Messages > AI_Reply for staff), `auto` (the reply is sent through W12).
 - `booking_mode` (W13): `link` (default: the patient confirms on the booking link, Cal.com → W4 writes Appointments) or `direct` (W13 writes the Booked row itself).
 - `slot_minutes` (30), `booking_capacity` (1 patient per slot), `booking_notice_minutes` (120): how W13 works out free times from open_time / close_time / working_days and the Booked appointments. No hours = W13 never offers a time.
+- `outcome_checkin` (W7), `review_requests` (W8), `weekly_report_whatsapp` (W9 owner copy): `on` to switch on for this clinic,
+  missing or anything else = off. Switch each on only after its template (`outcome_check`, `review_request`,
+  `weekly_owner_report`) is approved for the clinic's WhatsApp number.
+- `review_link` (W8): the clinic's own review page (e.g. its Google review link). Must start with `https://`; W8 never makes one
+  up: missing or not https = no review request, and a daily Run_Log warning (10:xx IST) says how many are waiting.
 - `handoff_reply`: what the patient gets when a person takes over (default: "Thank you for your message. A member of our team will reply to you shortly.").
 
 ### Run_Log
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime). W13 writes one row per message it handles
-(`W13-ai-receptionist`, "Lead_id wamid intent -> action (status)").
+(`W13-ai-receptionist`, "Lead_id wamid intent -> action (status)"). W7 (`W7-outcome-nudge`) and W8 (`W8-review-request`) write
+one row per attempt ("Booking_UID Lead_id", ok / failed + W12's reason), W10 (`W10-staff-reply`) one per staff reply,
+W9 (`W9-weekly-report`) the weekly report itself (Record = the full report text; Error = why the AI text was not used, if so)
+and "owner WhatsApp <week>" when the owner copy is sent. For a Reports page: a card list of Run_Log filtered on
+Workflow = W9-weekly-report.
 
 ## Agency Registry (a separate Grist doc, owned by the agency)
 One doc, one table. Every workflow reads it first to find the clinic (see CLAUDE.md "Clinic lookup"). Never hard-code a clinic.

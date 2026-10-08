@@ -11,7 +11,7 @@ Patient WhatsApp ─► Meta ─► W2  (answers Meta 200, stores lead / convers
                              │        last 40 messages, Booked appointments  ──►  free slots computed in CODE
                              ├─ gates (no AI): already handled · STOP · ai_mode off · opted out · paused · Needs_Human ·
                              │                 staff already answered · newer message · EMERGENCY words (→ URGENT hand-off) ·
-                             │                 night (defer) · media · rate limit
+                             │                 a staff member wrote in the last 24 h (W10) · night (defer) · media · rate limit
                              ├─ claim: Messages.AI_Status = processing   (no double replies)
                              ├─ Claude Haiku: ONE structured JSON decision (intent, action, reply, confidence, needs_human…)
                              ├─ checks in CODE: schema · triage (urgent / any risk flag → person) · confidence tiers (< 0.65 person,
@@ -71,7 +71,7 @@ One request per message to `claude-haiku-4-5` with **structured output** (the JS
 
 | Field | Values |
 |---|---|
-| `intent` | greeting, services_info, pricing, location_hours, availability_check, book_appointment, reschedule_appointment, cancel_appointment, appointment_status, follow_up_later, not_interested, thanks_ack, complaint, human_request, payment_issue, medical_question, other |
+| `intent` | greeting, services_info, pricing, location_hours, availability_check, book_appointment, reschedule_appointment, cancel_appointment, appointment_status, follow_up_later, not_interested, thanks_ack, complaint, human_request, payment_issue, medical_question, outcome_better, outcome_same, outcome_worse, other |
 | `action` | reply, offer_slots, book_slot, cancel_appointment, reschedule_appointment, schedule_follow_up, handoff, no_reply |
 | `needs_human`, `handoff_reason` | true + why, when a person must answer |
 | `confidence` | 0–1; below `min_confidence` (0.65) = a person answers; below `confidence_auto` (0.8) only informational answers (greeting, services, prices, location / hours, availability, appointment status, thanks) go out; Grist appointment writes need `confidence_write` (0.85) |
@@ -165,6 +165,13 @@ When the AI hands a conversation to a person, `Conversations > Needs_Human` is t
 - If that new message needs a person too, it is handed off again: a new staff alert, `Needs_Human` set again, `Handoff_Reason` = the new reason.
 - W13 never unticks `Needs_Human`; staff untick it when the issue is dealt with.
 - To keep the AI quiet while staff talk to the patient, tick `Automation_Paused`. A `Needs_Human` ticked by hand, with no hand-off from W13, also keeps the AI silent.
+- **Staff replies (W10):** for 24 h after a staff member's message (a Messages row Direction Out whose Sent_By is a person, not `W<n>-…`), the AI does not answer that patient; staff own the conversation. STOP and emergency words still work.
+
+**Answers to W7's check-in.** When the conversation shows the clinic asked "How are you feeling now?", the AI reads the answer as
+`outcome_better` (a short thank-you, or no reply), `outcome_same` (a person follows up) or `outcome_worse` (a person, priority at
+least HIGH, flagged medical; code forces the hand-off even if the model tries to answer, and never sends advice). Urgent words are
+caught before the AI (URGENT hand-off). "Book me again" is an ordinary `book_appointment` (real free times / the Cal.com link only).
+The answer is recorded in `Messages.Intent` and `Conversations.Last_Intent`; W9's weekly report counts them.
 
 ## 5. Limitations and open points (please decide)
 

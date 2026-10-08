@@ -194,3 +194,18 @@ A ticked `Needs_Human` used to skip every later patient message until staff unti
 - `validate-handoff-gate.js` proves nothing else changed.
 - `handoff-gate.test.js` covers the 7 requested cases.
 - `handoff-gate-regression.test.js` runs every existing suite on the result.
+- Since W7–W10 rebuilt the shared module, `apply-handoff-gate.js` checks its result against pinned fingerprints (the W13 build of commit 8be1676) instead of the current W13 build, so it still reproduces that file exactly.
+
+## 9. W7, W8, W9 and W10: the four reserved sections, built
+
+The full change report, architecture, settings, test results and the manual steps are in **`W7-W10-REPORT.md`**.
+
+| File | What it is |
+|---|---|
+| `apply-w7-w10.js` | `node n8n/integrated/apply-w7-w10.js --in <workflow after section 8> [--out <file>] [--keep-private]`. Fingerprint-checked; adds the 4 sections (75 nodes), swaps the pasted snippet block in 2 W12 and 4 W13 Code nodes, rewrites 5 sticky notes. Nothing removed, no existing connection changed. |
+| `ai-updated-workflow-clinic.w7-w10.json` | The result, public copy, inactive. Your import file (your values kept exactly) is sent to you directly, never committed. |
+| `validate-w7-w10.js` | 12 check groups, before vs after: secrets / webhooks / credentials changed = 0, W12 the only sender, pasted code = `n8n/snippets/`, canvas. |
+| `w7-w10.test.js` | 34 end-to-end checks: every requested W7 / W8 / W9 / W10 case, plus failures, two clinics and AI use. |
+| `w7-w10-mutations.test.js` | Breaks 23 safety rules once each (claims, guards, review gating, AI checks, ownership, W12); the test must catch every one. |
+| `w7-w10-regression.test.js` | Every existing suite (W1–W6, W11, W12, W13, Needs_Human gate, A1–A6) on the result. |
+| `../w7-w10/sections.js`, `../w7-w10/code/` | The node builder and the Code-node sources; the helpers are pasted verbatim from `n8n/snippets/clinic-modules.js`, `send-guard.js`, `normalize-phone.js`. |

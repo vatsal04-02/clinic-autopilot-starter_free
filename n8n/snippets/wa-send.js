@@ -18,6 +18,9 @@ const WA_TEMPLATES = {
   new_lead_staff_alert: { params: ['clinic_name', 'lead_name', 'lead_phone', { key: 'enquiry', fallback: '(no message)' }] },
   lead_escalation: { params: ['clinic_name', 'lead_name', 'lead_phone', 'waiting_minutes'] },
   human_handoff_alert: { params: ['clinic_name', 'lead_name', 'lead_phone', { key: 'reason', fallback: '(see the Grist inbox)' }] },
+  outcome_check: { params: ['name', 'clinic_name', { key: 'service', fallback: 'visit' }] },                    // W7
+  review_request: { params: ['name', 'clinic_name', 'review_link'] },                                          // W8
+  weekly_owner_report: { params: ['clinic_name', 'week', 'summary', { key: 'action', fallback: 'see the full report in Grist' }] },   // W9
 };
 
 // Free-text replies (message_type 'text', from W13) are only allowed inside WhatsApp's 24-hour customer-service
@@ -165,11 +168,13 @@ function waClassify(resp, cfg) {
 
 // Should this send be written to the Grist Inbox (Conversations + Messages)? Only patient messages that
 // actually reached the point of calling Meta. The conversation is the PATIENT's (lead_phone), even when
-// TEST_MODE sent the message to TEST_PHONE.
+// TEST_MODE sent the message to TEST_PHONE. A message that already has its own Messages row (W10 staff reply:
+// inbox_row_id) is not written again; its caller updates that row.
 function waInboxPlan(input, cfg, res, h) {
   const patient_phone = h.normalizeIndianPhone(input.lead_phone || input.patient_phone).phone;
   const attempted = ['accepted', 'uncertain', 'rejected'].includes(res.send_status);
-  const log = cfg.log_to_inbox !== false && input.audience === 'patient' && attempted && !!patient_phone && !!input.grist_base_url && !!input.doc_id;
+  const own = Number(input.inbox_row_id) > 0;
+  const log = cfg.log_to_inbox !== false && input.audience === 'patient' && attempted && !own && !!patient_phone && !!input.grist_base_url && !!input.doc_id;
   return { log, patient_phone };
 }
 

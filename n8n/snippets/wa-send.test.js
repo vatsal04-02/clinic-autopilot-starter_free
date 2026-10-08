@@ -138,4 +138,14 @@ eq(stop(text({ decision: { send: false, reason: 'automation paused' } })), [fals
 eq(prep({ template: 'human_handoff_alert', template_params: { clinic_name: 'D', lead_name: 'A', lead_phone: '+919800000001', reason: '' } }).meta_request.template.components[0].parameters.map((x) => x.text), ['D', 'A', '+919800000001', '(see the Grist inbox)'], 'handoff alert template, reason falls back');
 eq(waInboxRow({ ...input, message_type: 'text', template: '', message_text: '', text_body: 'Hi there' }, { send_status: 'accepted', wa_message_id: 'wamid.T' }, 5), { Direction: 'Out', Body: 'Hi there', Template: '', Sent_By: 'W5-reminders', WA_Message_ID: 'wamid.T', Status: 'queued', Send: false, Created_At: 5 }, 'text rows: body = the text, no template');
 
+// ---------------------------------------------------------------- W7 / W8 / W9 templates and the W10 own-row flag
+const vars = (t, tp) => prep({ template: t, template_params: tp }).meta_request.template.components[0].parameters.map((x) => x.text);
+eq(vars('outcome_check', { name: 'Asha', clinic_name: 'Demo Physio', service: 'Knee rehab' }), ['Asha', 'Demo Physio', 'Knee rehab'], 'W7 outcome_check');
+eq(vars('outcome_check', { name: 'Asha', clinic_name: 'Demo Physio', service: '' }), ['Asha', 'Demo Physio', 'visit'], 'W7: no service -> "visit"');
+eq(vars('review_request', { name: 'Asha', clinic_name: 'Demo Physio', review_link: 'https://g.page/r/demo/review' }), ['Asha', 'Demo Physio', 'https://g.page/r/demo/review'], 'W8 review_request');
+eq(stop(prep({ template: 'review_request', template_params: { name: 'Asha', clinic_name: 'Demo Physio', review_link: '' } })), [false, 'invalid'], 'W8: never sent without a review link');
+eq(vars('weekly_owner_report', { clinic_name: 'Demo Physio', week: '29 Sep - 05 Oct', summary: '24 new leads, 11 booked', action: '' }), ['Demo Physio', '29 Sep - 05 Oct', '24 new leads, 11 booked', 'see the full report in Grist'], 'W9 weekly_owner_report');
+eq(waInboxPlan({ ...input, inbox_row_id: 77 }, cfg, { send_status: 'accepted' }, h).log, false, 'W10: the staff row exists already -> not written again');
+eq(waInboxPlan({ ...input, inbox_row_id: 0 }, cfg, { send_status: 'accepted' }, h).log, true, 'no own row -> logged as before');
+
 console.log(`All ${n} wa-send cases pass`);

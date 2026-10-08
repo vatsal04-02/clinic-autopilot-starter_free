@@ -7,8 +7,9 @@
 //         Needs_Human ticked by hand (no hand-off message from W13) still keeps the AI silent. Needs_Human is never cleared by W13.
 //
 // The shared decision module (n8n/snippets/ai-receptionist.js) is pasted in 4 W13 Code nodes; the same 4 text edits are applied to
-// each (only W13 – Build Context runs the changed functions), then the result is checked against the rebuilt W13
-// (n8n/w13/W13-AI-Receptionist-Demo-OpenRouter.json). Every node is fingerprinted first; anything unexpected = nothing written.
+// each (only W13 – Build Context runs the changed functions), then the result is checked against the W13 build of commit 8be1676
+// (pinned fingerprints: later W13 builds move on, this one-time patch does not). Every node is fingerprinted first; anything
+// unexpected = nothing written.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -20,7 +21,6 @@ const IN = arg('--in');
 const OUT = arg('--out', path.join(__dirname, 'ai-updated-workflow-clinic.handoff-gate.json'));
 const KEEP_PRIVATE = args.includes('--keep-private');
 if (!IN) { console.error('usage: node apply-handoff-gate.js --in <workflow.json> [--out file] [--keep-private]'); process.exit(1); }
-const DEMO = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'w13', 'W13-AI-Receptionist-Demo-OpenRouter.json'), 'utf8'));
 const sha = (s) => crypto.createHash('sha256').update(s).digest('hex').slice(0, 16);
 const fail = (m) => { console.error(`apply-handoff-gate: ${m}\nNothing was written.`); process.exit(1); };
 
@@ -29,6 +29,12 @@ const FINGERPRINTS = {   // the W13 code in your workflow (= the W13 build of co
   'W13 – Plan': '3033bba4e84d4294',
   'W13 – Plan Ready': '088f7b7c7e53cdc1',
   'W13 – Record Sends': '50f500992df6b6c8',
+};
+const RESULTS = {   // the same 4 nodes after the edits (= the W13 build of commit 8be1676)
+  'W13 – Build Context': '2aeef88590ada56c',
+  'W13 – Plan': 'e37398352961807e',
+  'W13 – Plan Ready': 'be94a1e0dcdc3c2e',
+  'W13 – Record Sends': 'bd781a8125518c60',
 };
 const EDITS = [
   [`  const aiRepliesLastHour = others.filter((r) => r.fields.Direction === 'Out' && /^W13/.test(String(r.fields.Sent_By || '')) && (Number(r.fields.Created_At) || 0) >= nowSec - 3600).length;
@@ -66,8 +72,7 @@ for (const [name, want] of Object.entries(FINGERPRINTS)) {
     if (count !== 1) fail(`${name}: the text to change was found ${count} times (expected once):\n${from}`);
     code = code.replace(from, () => to);
   }
-  const built = DEMO.nodes.find((x) => x.name === name);
-  if (!built || built.parameters.jsCode !== code) fail(`${name}: the result differs from the rebuilt W13 (rebuild with node n8n/w13/build-w13.js --provider openrouter)`);
+  if (sha(code) !== RESULTS[name]) fail(`${name}: the result is not the W13 build of commit 8be1676 (fingerprint ${sha(code)})`);
   n.parameters.jsCode = code;
 }
 wf.active = false;
@@ -76,5 +81,5 @@ const out = KEEP_PRIVATE ? wf : redact(wf, report);
 fs.mkdirSync(path.dirname(OUT), { recursive: true });
 fs.writeFileSync(OUT, `${JSON.stringify(out, null, 2)}\n`);
 console.log(`wrote ${OUT}: ${out.nodes.length} nodes, active = false`);
-console.log(`  - ${Object.keys(FINGERPRINTS).join(', ')}: Needs_Human gate (4 text edits each, identical to the rebuilt W13)`);
+console.log(`  - ${Object.keys(FINGERPRINTS).join(', ')}: Needs_Human gate (4 text edits each, identical to the W13 build of commit 8be1676)`);
 console.log(`redactions: ${KEEP_PRIVATE ? 'none (--keep-private: every value is kept exactly as in your file)' : report.join('; ') || 'none needed'}`);

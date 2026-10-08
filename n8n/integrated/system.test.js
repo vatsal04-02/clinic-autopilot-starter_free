@@ -112,7 +112,7 @@ check('W1.4', 'invalid lead (bad phone number)', () => {
 check('W1.5', 'unknown clinic', () => {
   const x = w1({ clinic_slug: 'nope' }, crm());
   assert.strictEqual(x.r.error && x.r.error.node, 'W1 – Unknown clinic');
-  return 'stops at W1 – Unknown clinic (error -> W11 when it is wired)';
+  return 'stops at W1 – Unknown clinic (a production run then triggers W11, this workflow\'s own Error Trigger)';
 });
 
 // ================================================================ W2 inbound WhatsApp + W13 AI receptionist (one path)
