@@ -168,3 +168,20 @@ alert again. If the alert failed, Escalated stays off and W3 escalates as before
 
 **Import:** as in section 3. Import the private file as a new workflow (inactive) and check `W13 – Ask Model`'s credential. Then switch over
 yourself. Before trusting the tiers, watch a few days of Run_Log (`gate=… model …ms tok …`) with `ai_mode = draft`.
+
+## 7. AI context for W3, W4, W5 and W6 ("ai updated workflow clinic")
+
+The full change, test and security report is in **`AI-CONTEXT-REPORT.md`**. In short:
+- **No new model call.** One shared deterministic module, `n8n/snippets/lead-context.js`, reads what W13 and staff already write to the CRM. It can only hold back or reorder a step that W3, W5 or W6 already allow.
+- **W4:** a verified Cal.com cancellation also sets the lead's `Next_Action_At` (a rebook signal).
+
+| File | What it is |
+|---|---|
+| `source/ai-updated-workflow-clinic.export.redacted.json` | Your export, redacted for this public repository. |
+| `apply-ai-context.js` | `node n8n/integrated/apply-ai-context.js --in <export> [--out <file>] [--keep-private]`. Fingerprint-checked; it changes 5 node codes, adds `W5 – Conversations` and reroutes 1 connection. |
+| `ai-updated-workflow-clinic.ai-context.json` | The result, public copy, inactive. Your import file (your values kept exactly) was sent to you directly. |
+| `validate-ai-context.js` | 13 check groups, before vs after: credentials / webhooks / secrets / schema changed = 0. |
+| `system.test.js` | 83 checks over W1–W13 plus cross-cutting safety, PASS / FAIL with the reason for each. |
+| `ai-context-mutations.test.js` | Breaks each new rule once (15 breakages); the system test must catch every one. |
+| `ai-context-regression.test.js` | The existing suites before vs after; only the 2 intended A5 / A6 differences are allowed. |
+| `redact.js` | The redaction used for public copies. |

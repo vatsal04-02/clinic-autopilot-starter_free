@@ -20,14 +20,14 @@ n8n and every workflow depend on them. Change a name here first, then in the tem
 | Likely_Service | Text | set by n8n (optional) |
 | Status | Choice | New (red), Contacted (amber), Booked (blue), Converted (green), Lost (grey) |
 | Owner | Text | staff name |
-| Next_Action_At | DateTime | |
+| Next_Action_At | DateTime | next planned contact: staff, W13 ("ask me later"), W4 (now, on a Cal.com cancellation). In the future = W3 / W6 hold their automated step |
 | First_Response_At | DateTime | set when status leaves New |
 | Lost_Reason | Choice | No response, Price, Distance, Went elsewhere, Not a fit, Other |
 | Opted_Out | Toggle | |
 | Escalated | Toggle | set by n8n |
 | Followup_Sent | Toggle | set by n8n |
 | Notes | Text | no medical history |
-| Lead_Stage | Choice | cold, warm, hot — set by W13 (AI) |
+| Lead_Stage | Choice | cold, warm, hot — set by W13 (AI); W3 / W6 order by it (hot first), W6 sends no day-2 follow-up to cold |
 | Week | Formula | `$Created_At.date() - datetime.timedelta(days=$Created_At.weekday())` |
 | Was_Booked | Formula | `$Status in ("Booked", "Converted")` |
 | Response_Minutes | Formula | `($First_Response_At - $Created_At).total_seconds() / 60 if $First_Response_At else None` |
@@ -51,7 +51,9 @@ n8n and every workflow depend on them. Change a name here first, then in the tem
 ### Conversations
 Lead (Reference → Leads), Phone, Last_Inbound_At (DateTime), Unread (Integer), Automation_Paused (Toggle), Assigned_To (Text),
 Needs_Human (Toggle — W13 ticks it when a person must answer; the AI stays silent until staff untick it),
-Handoff_Reason (Text — why, set by W13), Last_Intent (Text — the AI's reading of the last message, set by W13)
+Handoff_Reason (Text — why, set by W13), Last_Intent (Text — the AI's reading of the last message, set by W13).
+W3, W5 and W6 read these (n8n/snippets/lead-context.js): Assigned_To / Needs_Human = a person owns it; Last_Intent not_interested / opt_out = no automated push;
+a pending cancel / reschedule request with Needs_Human holds W5's 24 h reminder.
 
 ### Messages
 Conversation (Reference → Conversations), Direction (Choice: In, Out), Body (Text), Template (Text), Sent_By (Text),
