@@ -38,7 +38,7 @@ New execution of this workflow (one per message):
       ─► Build Context: safety gates (already handled · STOP · ai_mode off · opted out · paused · Needs_Human · staff answered ·
                         newer message · night (deferred) · media · rate limit)
       ─► Claim (Messages.AI_Status = processing) ─► OpenRouter: Provider Request ─► Ask Model ─► Provider Answer
-      ─► Plan: the JSON decision is validated (schema, confidence ≥ 0.7, complaint/payment/medical/human → person, fact check of
+      ─► Plan: the JSON decision is validated (schema, triage, confidence tiers 0.65 / 0.80 / 0.85, complaint/payment/medical/human → person, fact check of
                prices / times / links / phone numbers against Knowledge and the real free slots)
       ─► appointment writes first (direct booking / WhatsApp-booked cancel; if one fails → hand-off)
       ─► W13 – Call W12 ─► THIS workflow again (wait) ─► W12 – AI Job? (no) ─► W12 (allowlist, quiet hours, 24 h window, TEST_MODE) ─► Meta
@@ -104,7 +104,7 @@ The other 193 nodes and 152 connections are byte-identical to your export, inclu
 
 ## 4. Test results
 
-`node n8n/tests/run-all.js` (24 files, all pass). For the integrated master:
+`node n8n/tests/run-all.js` (28 files, all pass). For the integrated master:
 
 | # | Test | Result |
 |---|---|---|
@@ -133,4 +133,38 @@ The other 193 nodes and 152 connections are byte-identical to your export, inclu
 - **Simulator only.** Real OpenRouter, Meta and Grist behaviour comes in your first runs: use `ai_mode = draft` and TEST_MODE on.
 - **Instance time zone.** `W13 – Every Morning` uses the instance time zone, as W6's "10:00" already does (the master has no time-zone setting).
 - **Pre-existing unconnected node.** `W2 – Test Cases` was already unconnected in your export and is left as is: W2's manual-test trigger was removed when W2 joined the master.
-- **Not covered by the AI layer:** W2 still does not verify Meta's `X-Hub-Signature-256`, and W6's day-2 follow-up ignores Lead_Stage and Next_Action_At (see `n8n/w13/README.md` section 5).
+- **Not covered by the AI layer:** W2 still does not verify Meta's `X-Hub-Signature-256`. (W6's day-2 follow-up gating is done for your live workflow by `apply-ai-os.js`, section 6.)
+
+## 6. AI OS improvements A1–A6 on your live workflow ("ai workflow clinic")
+
+Your live workflow had moved on from `clinic-autopilot-master-ai.json`: it was re-imported, `W13 – Plan` was edited, credentials were picked. So A1–A6 are
+applied to **your export** of it, not rebuilt:
+
+| File | What it is |
+|---|---|
+| `source/ai-workflow-clinic.export.redacted.json` | Your export of "ai workflow clinic", redacted (verify token, Cal.com secret, allowlisted number → placeholders). |
+| `apply-ai-os.js` | Applies A1–A6: `node n8n/integrated/apply-ai-os.js --in <export> [--out <file>] [--keep-private]`. Every node it edits is fingerprinted first; if one was changed in n8n since the export, it stops and writes nothing. |
+| `ai-workflow-clinic.ai-os.json` | The result, **public copy**, saved inactive. Your private import file was sent to you directly and is never committed. |
+| `validate-ai-os.js` | 11 check groups comparing the result with the export (add `--private --orig <export> --patched <file>` for your own pair). |
+| `ai-os.test.js` | 14 end-to-end check groups for A1–A6, before / after comparisons with the original, and 13 mutation tests. |
+| `ai-os-regression.test.js` | `integrated.test.js` and `existing-modules.test.js`, unchanged, on the patched workflow AND on the original. |
+
+**What changes (and nothing else, proven by `validate-ai-os.js`):**
+
+| | Node | Change |
+|---|---|---|
+| A1–A4, A2 | `W13 – Start`, `W13 – Build Context`, `W13 – Plan`, `W13 – Plan Ready`, `W13 – Record Sends` | Code from the rebuilt OpenRouter W13 (`n8n/snippets/ai-receptionist.js`): your live `no_reply` rule (A1), the triage fields + emergency gate (A3), confidence tiers (A4), the decision trace (A2). Ids, positions and settings unchanged. |
+| A4 | `W13 – Config` | `min_confidence` 0.7 → 0.65; new `confidence_auto` = 0.8, `confidence_write` = 0.85. Model, provider and every other value unchanged. |
+| A5 | `W6 – Plan follow-ups` | The day-2 follow-up skips Needs_Human, Lead_Stage cold, Last_Intent not_interested / opt_out, a future Next_Action_At, and a patient message in the last 48 h. No-show rebook and Mark Lost unchanged. |
+| A6 | `W3 – Find due`, `W3 – Build Message` | Hot → warm / unknown → cold, then oldest first; skips conversations with Automation_Paused or Assigned_To; the staff message carries AI_Summary (else Enquiry) and the stage. Template unchanged. |
+| A6 | **new** `W3 – Conversations` | Grist read of Conversations (credential of `W3 – Leads`), between `W3 – Leads` and `W3 – Find due`. On error it continues and nothing is skipped. |
+
+- **Connections:** only `W3 – Leads → W3 – Find due` became `W3 – Leads → W3 – Conversations → W3 – Find due`.
+- **Credentials and schema:** no credential changed or added, and no Grist table or column added. Every column read is already in `grist/schema.md`.
+- **Senders:** W12 is still the only node that calls Meta, and the patient hand-off reply wording is unchanged.
+
+**How A3 and A6 meet:** when the AI hands a lead to staff and the `human_handoff_alert` is delivered, W13 sets LEADS > Escalated, so W3 does not
+alert again. If the alert failed, Escalated stays off and W3 escalates as before (the safety net).
+
+**Import:** as in section 3. Import the private file as a new workflow (inactive) and check `W13 – Ask Model`'s credential. Then switch over
+yourself. Before trusting the tiers, watch a few days of Run_Log (`gate=… model …ms tok …`) with `ai_mode = draft`.

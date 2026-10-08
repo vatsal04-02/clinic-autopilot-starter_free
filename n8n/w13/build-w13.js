@@ -128,7 +128,9 @@ setNode(N.config, at(2, 1), [
   ['leads_table', 'LEADS'],                           // the live leads table (as in W1-W6 and W2)
   ...(OR ? [['model_provider', 'openrouter'], ['openrouter_model', OPENROUTER_MODEL]] : [['anthropic_model', 'claude-haiku-4-5']]),
   ['w12_workflow_id', W12_PLACEHOLDER],               // id of the workflow that contains W12 (the master workflow), from its URL
-  ['min_confidence', 0.7],
+  ['min_confidence', 0.65],                           // below: a person answers
+  ['confidence_auto', 0.8],                           // below (and >= min_confidence): informational answers only
+  ['confidence_write', 0.85],                         // appointment changes (book / cancel / reschedule in Grist) need at least this
   ['max_ai_replies_per_hour', 6],
   ['history_limit', 12],
   ['slot_days', 7],

@@ -12,6 +12,7 @@ const files = [
   ...fs.readdirSync(path.join(root, 'w2')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'w2', f)),
   ...fs.readdirSync(path.join(root, 'w13')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'w13', f)),
   path.join(root, 'integrated', 'validate-integrated.js'),
+  path.join(root, 'integrated', 'validate-ai-os.js'),
   ...fs.readdirSync(path.join(root, 'integrated')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'integrated', f)),
 ];
 

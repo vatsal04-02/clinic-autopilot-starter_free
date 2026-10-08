@@ -49,7 +49,7 @@ const messageRows = () => [
 const BASE_DECISION = {
   intent: 'other', action: 'reply', needs_human: false, handoff_reason: '', confidence: 0.92, sentiment: 'neutral', language: 'en',
   lead_stage: 'warm', reply: '', booking: { date: null, time: null, time_window: null }, appointment_ref: null, follow_up_days: null,
-  kb_refs: [], likely_service: null, lead_summary: '',
+  kb_refs: [], likely_service: null, lead_summary: '', priority: 'normal', staff_note: '', risk_flags: [],
 };
 const twelve = (hhmm) => { const [h, m] = hhmm.split(':').map(Number); return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`; };
 

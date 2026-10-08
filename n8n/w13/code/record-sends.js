@@ -15,7 +15,15 @@ for (const it of b.x.dry_run ? [] : ready.send_items) {
   if (it.w13_kind === 'patient_reply' && !sends.patient) sends.patient = sentNothing('patient_reply');
   if (it.w13_kind === 'staff_alert' && !sends.staff) sends.staff = sentNothing('staff_alert');
 }
-const fw = aiFinalWrites(ready.plan, b.x, sends, Math.floor(Date.now() / 1000));
+// Decision trace for Run_Log (A2): which gate, model, time from context to decision, tokens, and whether the AI answer was unusable.
+const p = $('W13 – Plan').first().json;
+const u = p.usage || {};
+const st = $('W13 – Start').first().json;
+const trace = b.gate.route === 'ai' ? {
+  gate: 'ai', model: u.model || st.openrouter_model || st.anthropic_model || '', latency_ms: Number(p.decided_at) - Number(b.t0),
+  tokens_in: u.input_tokens, tokens_out: u.output_tokens, fallback: !!p.ai_error,
+} : { gate: b.gate.route };
+const fw = aiFinalWrites(ready.plan, b.x, sends, Math.floor(Date.now() / 1000), trace);
 const c = $('W13 – Resolve Clinic').first().json;
 const brief = (r) => (r ? { sent: r.sent === true, send_status: r.send_status || '', to: (r.decision && r.decision.to) || null, error: r.send_error || '' } : null);
 const report = {

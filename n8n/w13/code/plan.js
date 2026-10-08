@@ -8,7 +8,7 @@ let usage = null;
 if ($json.claim_error) plan = aiGatePlan({ route: 'failed', reason: `could not mark the message as processing: ${$json.claim_error}` }, b.x, b.cfg);
 else if (b.gate.route !== 'ai') plan = aiGatePlan(b.gate, b.x, b.cfg);
 else {
-  usage = $json.usage || null;
+  usage = $json.usage ? { ...$json.usage, model: $json.usage.model || $json.model || '' } : null;
   const parsed = aiParseResponse($json);
   const problems = parsed.ok ? aiValidateDecision(parsed.decision) : [];
   if (parsed.ok && !problems.length) decision = parsed.decision;
@@ -16,4 +16,4 @@ else {
   plan = aiPlan(decision, b.x, b.cfg);
   if (ai_error) plan.reason = `${plan.reason}: ${ai_error}`.slice(0, 300);
 }
-return [{ json: { plan, decision, ai_error, usage, dry_run: b.x.dry_run } }];
+return [{ json: { plan, decision, ai_error, usage, decided_at: Date.now(), dry_run: b.x.dry_run } }];

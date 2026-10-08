@@ -21,13 +21,23 @@ const AI_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const AI_DAY_WORDS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
 const AI_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const AI_WORKFLOW = 'W13-ai-receptionist';
+// Triage (A3): how urgent a hand-off is, and why. Any risk flag or priority "urgent" always means a person answers.
+const AI_PRIORITIES = ['urgent', 'high', 'normal'];
+const AI_RISK_FLAGS = ['emergency', 'complaint', 'payment', 'medical', 'legal', 'abusive', 'sensitive'];
+// Confidence tiers (A4): between min_confidence and confidence_auto only these informational answers may go out on their own.
+const AI_INFO_INTENTS = ['greeting', 'services_info', 'pricing', 'location_hours', 'availability_check', 'appointment_status', 'thanks_ack'];
+const AI_INFO_ACTIONS = ['reply', 'offer_slots', 'no_reply'];
+const AI_NO_REPLY_INTENTS = ['thanks_ack', 'not_interested'];   // no_reply for anything else = a person answers (live rule, A1)
+// Deterministic emergency check (A3), before any AI. Only unambiguous phrases: stroke, paralysis, fracture or accident are
+// everyday physio rehab topics and would raise false URGENT alerts (the model can still flag them as risks).
+const AI_EMERGENCY = /\b(chest pain|heart attack|can'?t breathe|cannot breathe|unable to breathe|difficulty (in )?breathing|not breathing|unconscious|fainted|passed out|collapsed|heavy bleeding|bleeding heavily|severe bleeding|bleeding a lot|suicid\w*|kill myself|end my life|self[- ]harm|medical emergency|(it'?s|this is) an emergency|emergency hai|seene me(in)? dard|chhati me(in)? dard|saans (nahi|nahin|lene me(in)?)|behosh|aatmahatya)\b|सीने में दर्द|छाती में दर्द|सांस नहीं|साँस नहीं|बेहोश|आत्महत्या/i;
 
 const aiNullable = (schema) => ({ anyOf: [schema, { type: 'null' }] });
 const AI_DECISION_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: ['intent', 'action', 'needs_human', 'handoff_reason', 'confidence', 'sentiment', 'language', 'lead_stage', 'reply',
-    'booking', 'appointment_ref', 'follow_up_days', 'kb_refs', 'likely_service', 'lead_summary'],
+    'booking', 'appointment_ref', 'follow_up_days', 'kb_refs', 'likely_service', 'lead_summary', 'priority', 'staff_note', 'risk_flags'],
   properties: {
     intent: { type: 'string', enum: AI_INTENTS },
     action: { type: 'string', enum: AI_ACTIONS },
@@ -53,6 +63,9 @@ const AI_DECISION_SCHEMA = {
     kb_refs: { type: 'array', items: { type: 'string' } },
     likely_service: aiNullable({ type: 'string' }),
     lead_summary: { type: 'string' },
+    priority: { type: 'string', enum: AI_PRIORITIES },
+    staff_note: { type: 'string' },
+    risk_flags: { type: 'array', items: { type: 'string', enum: AI_RISK_FLAGS } },
   },
 };
 
@@ -72,6 +85,14 @@ function aiDayLabel(date) {
 }
 function aiHHMM(m) { return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`; }
 function ai12h(m) { const hh = Math.floor(m / 60); return `${hh % 12 || 12}:${String(m % 60).padStart(2, '0')} ${hh >= 12 ? 'PM' : 'AM'}`; }
+function aiNum(v, dflt) { const n = Number(v); return v !== undefined && v !== null && String(v).trim() !== '' && Number.isFinite(n) && n > 0 && n <= 1 ? n : dflt; }
+// A short note for staff: no links or phone numbers (they never come from the AI into a WhatsApp alert), max 200 characters.
+function aiStaffNote(v) { return aiLine(String(v === null || v === undefined ? '' : v).replace(/https?:\/\/\S+/gi, '[link]').replace(/\+?\d[\d\s-]{7,}\d/g, '[number]'), 200); }
+function aiEmergencyIn(text) { const m = String(text || '').match(AI_EMERGENCY); return m ? aiLine(m[0], 40) : ''; }
+function aiTriage(d) {
+  const flags = [...new Set((Array.isArray(d && d.risk_flags) ? d.risk_flags : []).filter((f) => AI_RISK_FLAGS.includes(f)))];
+  return { priority: d && AI_PRIORITIES.includes(d.priority) ? d.priority : 'normal', flags, note: aiStaffNote(d && d.staff_note) };
+}
 function aiErrText(r) {
   const e = r && r.error;
   if (!e) return 'no answer';
@@ -277,7 +298,7 @@ function aiContext(raw, cfg, nowMs, h) {
     msg: { row_id: msg ? msg.id : 0, wa_message_id: aiLine(mf.WA_Message_ID || st.wa_message_id || `dry-run-${nowMs}`, 120), timestamp: ts, ai_status: aiLine(mf.AI_Status, 20) },
     clinic: { wa_phone_number_id: raw.clinic.wa_phone_number_id, grist_base_url: raw.clinic.grist_base_url, doc_id: raw.clinic.doc_id, name: profile.clinic_name },
     conversation: { row_id: conv ? conv.id : 0 },
-    cfg: { reply_mode: dry ? 'auto' : profile.ai_mode, leads_table: cfg.leads_table, min_confidence: cfg.min_confidence, pause_on_handoff: cfg.pause_on_handoff === true, staff_alert_template: cfg.staff_alert_template },
+    cfg: { reply_mode: dry ? 'auto' : profile.ai_mode, leads_table: cfg.leads_table, min_confidence: cfg.min_confidence, confidence_auto: cfg.confidence_auto, confidence_write: cfg.confidence_write, pause_on_handoff: cfg.pause_on_handoff === true, staff_alert_template: cfg.staff_alert_template },
     text,
     notes,
   };
@@ -316,6 +337,11 @@ function aiGates(c) {
   if (c.needs_human) return { route: 'skip', reason: 'this conversation is waiting for a person (untick Conversations > Needs_Human to let the AI answer again)' };
   if (c.answered_after) return { route: 'skip', reason: 'the clinic already answered after this message' };
   if (c.newer_inbound) return { route: 'skip', reason: 'a newer message from this patient is answered instead' };
+  const emergency = aiEmergencyIn(c.text);
+  if (emergency) {
+    return { route: 'handoff', reason: `possible emergency ("${emergency}")`,
+      triage: { priority: 'urgent', flags: ['emergency'], note: aiStaffNote(`Possible emergency ("${emergency}"). Patient wrote: "${aiLine(c.text, 120)}". Contact the patient now.`) } };
+  }
   if (!c.dry_run && c.night) return { route: 'defer', reason: 'quiet hours (21:00-08:00 IST): answered by the 08:05 run' };
   if (!['text', 'button', 'interactive'].includes(c.msg_type)) return { route: 'handoff', reason: `the patient sent a ${c.msg_type} message; the AI only reads text` };
   if (!aiClean(c.text, 10)) return { route: 'skip', reason: 'empty message' };
@@ -351,6 +377,8 @@ const AI_RULES = [
   'Reply',
   '- The patient\'s own language and script (English, Hindi or Hinglish), friendly, at most 3 short sentences and under 500 characters, no markdown. Use the patient\'s first name if known. It is sent on WhatsApp exactly as you write it.',
   '- For "handoff" and "no_reply" the reply may be empty; the system sends its own message.',
+  '',
+  'Triage (for the clinic staff): priority urgent = a possible emergency or danger to health or safety; high = complaint, angry patient, payment or refund dispute, medical question, legal threat, or the patient insists on a person; normal = everything else. risk_flags = every one of emergency, complaint, payment, medical, legal, abusive, sensitive that applies (empty list if none): any flag means a person answers. staff_note = at most 200 characters for the staff: what the patient wants and the recommended next step (for example "Unhappy with yesterday\'s session, wants the doctor to call. Suggest: call today."), no links or phone numbers. Fill priority, staff_note and risk_flags for every message.',
   '',
   'Other fields: lead_stage hot = wants to book now, warm = interested or asking questions, cold = not interested or unclear. lead_summary = one or two sentences on what this patient wants so far (no medical details beyond their own words). kb_refs = the K-numbers you used. likely_service = a service title exactly as written in the knowledge base, or null. language = the language of the patient\'s message.',
   '',
@@ -449,6 +477,9 @@ function aiValidateDecision(d) {
   if (!(d.follow_up_days === null || Number.isInteger(d.follow_up_days))) p.push('follow_up_days is not a whole number');
   if (!Array.isArray(d.kb_refs) || d.kb_refs.some((x) => typeof x !== 'string')) p.push('kb_refs is not a list');
   if (!strOrNull(d.likely_service)) p.push('likely_service is not text');
+  if (!AI_PRIORITIES.includes(d.priority)) p.push('bad priority');
+  if (typeof d.staff_note !== 'string') p.push('staff_note is not text');
+  if (!Array.isArray(d.risk_flags) || d.risk_flags.some((x) => !AI_RISK_FLAGS.includes(x))) p.push('bad risk_flags');
   return p;
 }
 
@@ -528,9 +559,13 @@ function aiEmptyPlan(route, reason) {
   return { route, intent: '', action: route, confidence: 0, reason: aiLine(reason, 300), reply: '', links: {}, action_writes: [], lead_patch: {}, conversation_patch: {}, booked: null, cancelled: null, notes: [] };
 }
 function aiToHandoff(plan, x, cfg, reason) {
+  const t = plan.triage || { priority: 'normal', flags: [], note: '' };
+  const why = aiLine(reason, 300) || 'needs a person';
+  const label = t.priority === 'urgent' ? 'URGENT · ' : t.priority === 'high' ? 'HIGH · ' : '';
   plan.route = 'handoff';
   plan.action = 'handoff';
-  plan.reason = aiLine(reason, 300) || 'needs a person';
+  plan.reason = aiLine(`${label}${t.note || why}`, 300);   // what staff read in the alert and in Handoff_Reason
+  if (t.note && t.note !== why && !plan.notes.includes(`hand-off: ${why}`)) plan.notes.push(`hand-off: ${why}`);
   plan.reply = x.profile.handoff_reply;
   plan.links = {};
   plan.action_writes = [];
@@ -548,6 +583,7 @@ function aiToHandoff(plan, x, cfg, reason) {
 function aiGatePlan(gate, x, cfg) {
   const plan = aiEmptyPlan(gate.route, gate.reason);
   plan.quiet = gate.quiet === true;
+  if (gate.triage) plan.triage = gate.triage;
   if (gate.route === 'opt_out') { plan.intent = 'opt_out'; plan.lead_patch.Opted_Out = true; plan.conversation_patch.Last_Intent = 'opt_out'; }
   if (gate.route === 'handoff') aiToHandoff(plan, x, cfg, gate.reason);
   return plan;
@@ -561,6 +597,7 @@ function aiPlan(d, x, cfg) {
   plan.intent = d.intent;
   plan.action = d.action;
   plan.confidence = d.confidence;
+  plan.triage = aiTriage(d);
 
   // what we learn about the lead, whatever happens next
   plan.lead_patch.Lead_Stage = d.lead_stage;
@@ -571,11 +608,25 @@ function aiPlan(d, x, cfg) {
   }
   plan.conversation_patch.Last_Intent = d.intent;
 
-  const minConf = Number(cfg.min_confidence) || 0.7;
+  // A3: urgent or any risk flag -> always a person
+  if (plan.triage.priority === 'urgent') return handoff(d.handoff_reason || `urgent ${d.intent.replace(/_/g, ' ')}`);
+  if (plan.triage.flags.length) return handoff(d.handoff_reason || `risk: ${plan.triage.flags.join(', ')}`);
   if (d.needs_human || d.action === 'handoff') return handoff(d.handoff_reason || `intent ${d.intent}`);
   if (AI_HUMAN_INTENTS.includes(d.intent)) return handoff(`${d.intent.replace(/_/g, ' ')}${d.handoff_reason ? `: ${d.handoff_reason}` : ''}`);
-  if (d.confidence < minConf) return handoff(`low confidence (${d.confidence})`);
-  if (d.action === 'no_reply') { plan.route = 'no_reply'; return plan; }
+  // A4: confidence tiers. < min_confidence: a person. Below confidence_auto: informational answers only. Negative mood:
+  // informational answers only. Appointment changes (writes) need confidence_write, checked after routing below.
+  const tLow = aiNum(cfg.min_confidence, 0.65);
+  const tAuto = aiNum(cfg.confidence_auto, 0.8);
+  const tWrite = aiNum(cfg.confidence_write, 0.85);
+  const informational = AI_INFO_INTENTS.includes(d.intent) && AI_INFO_ACTIONS.includes(d.action);
+  if (d.confidence < tLow) return handoff(`low confidence (${d.confidence})`);
+  if (d.confidence < tAuto && !informational) return handoff(`confidence ${d.confidence} is below ${tAuto} for ${d.action} (${d.intent})`);
+  if (d.sentiment === 'negative' && !informational) return handoff(`negative sentiment (${d.intent})`);
+  // A1 (live rule): no_reply only where silence makes sense; otherwise a person answers instead of dropping the message.
+  if (d.action === 'no_reply') {
+    if (AI_NO_REPLY_INTENTS.includes(d.intent)) { plan.route = 'no_reply'; return plan; }
+    return handoff(`AI selected no_reply for ${d.intent}; a response is required`);
+  }
   if (!aiClean(d.reply, 10)) return handoff('the AI gave no reply text');
 
   const slotAction = d.action === 'offer_slots' || d.action === 'book_slot' || (d.action === 'reschedule_appointment' && !!d.booking.time);
@@ -586,6 +637,7 @@ function aiPlan(d, x, cfg) {
   }
   plan.reply = aiClean(d.reply, 1000);
   aiRoute(d, x, plan, handoff);
+  if (plan.route !== 'handoff' && plan.action_writes.length && d.confidence < tWrite) return handoff(`confidence ${d.confidence} is below ${tWrite} for an appointment change`);
   if (plan.route !== 'handoff') aiFinishLinks(plan, x, handoff);
   return plan;
 }
@@ -773,7 +825,17 @@ function aiSendItems(plan, x, h) {
 
 // ---------------------------------------------------------------- the final CRM writes, after the sends
 // sends: { patient: W12 result or null, staff: W12 result or null }. Returns { status, needs_human, writes }.
-function aiFinalWrites(plan, x, sends, nowSec) {
+// trace (optional, A2): { gate, model, latency_ms, tokens_in, tokens_out, fallback } -> Run_Log Record / AI_Reason.
+function aiTraceText(t) {
+  if (!t) return '';
+  const parts = [`gate=${t.gate || '-'}`];
+  if (t.model) parts.push(String(t.model));
+  if (Number.isFinite(t.latency_ms)) parts.push(`${Math.round(t.latency_ms)}ms`);
+  if (Number.isFinite(t.tokens_in) || Number.isFinite(t.tokens_out)) parts.push(`tok ${Number.isFinite(t.tokens_in) ? t.tokens_in : '?'}/${Number.isFinite(t.tokens_out) ? t.tokens_out : '?'}`);
+  if (t.fallback) parts.push('fallback');
+  return parts.join(' ');
+}
+function aiFinalWrites(plan, x, sends, nowSec, trace) {
   if (plan.quiet) return { status: 'skipped', needs_human: false, writes: [] };
   const reply = sends.patient;
   const staff = sends.staff;
@@ -797,6 +859,10 @@ function aiFinalWrites(plan, x, sends, nowSec) {
   if (staff && !staff.sent) reason = [reason, `staff alert not sent: ${staff.send_error || (staff.decision && staff.decision.reason) || staff.send_status}`].filter(Boolean).join('; ');
   if (plan.notes && plan.notes.length) reason = [reason, ...plan.notes].filter(Boolean).join('; ');
   if (x.notes && x.notes.length) reason = [reason, ...x.notes].filter(Boolean).join('; ');
+  const t = plan.triage;
+  const tags = t ? [...(t.priority && t.priority !== 'normal' ? [t.priority] : []), ...(t.flags || [])] : [];
+  if (tags.length) reason = `[${tags.join(' · ')}] ${reason}`;
+  if (trace && trace.fallback) reason = `fallback: ${reason}`;
   const needsHuman = plan.route === 'handoff' || status === 'failed';
   const report = { status, needs_human: needsHuman, route: plan.route, reason: aiClean(reason, 500), reply: aiClean(filled.text, 2000) };
   if (x.dry_run) return { ...report, writes: [] };
@@ -817,12 +883,13 @@ function aiFinalWrites(plan, x, sends, nowSec) {
     const answered = !!reply && reply.sent && plan.route !== 'handoff';   // a hand-off "we will reply" does not count: W3 keeps chasing staff
     if (answered && x.lead.status === 'New' && lead.Status !== 'Booked') lead.Status = 'Contacted';
     if (answered && !x.lead.first_response_at) lead.First_Response_At = nowSec;
+    if (plan.route === 'handoff' && staff && staff.sent === true) lead.Escalated = true;   // staff were alerted: W3 does not escalate again
     if (Object.keys(lead).length && x.lead.row_id) writes.push({ method: 'PATCH', table: x.cfg.leads_table, body: { records: [{ id: x.lead.row_id, fields: lead }] } });
   }
 
   writes.push({ method: 'POST', table: 'Run_Log', body: { records: [{ fields: {
     Workflow: AI_WORKFLOW,
-    Record: aiLine(`${x.lead.lead_id || 'lead'} ${x.msg.wa_message_id} ${plan.intent || '-'} -> ${plan.route} (${status})`, 200),
+    Record: aiLine(`${x.lead.lead_id || 'lead'} ${x.msg.wa_message_id} ${plan.intent || '-'} -> ${plan.route} (${status})${trace ? ` | ${aiTraceText(trace)}` : ''}`, 200),
     Outcome: status === 'failed' ? 'failed' : (status === 'skipped' ? 'skipped' : 'ok'),
     Error: aiClean(reason, 500),
     At: nowSec,
@@ -833,6 +900,7 @@ function aiFinalWrites(plan, x, sends, nowSec) {
 if (typeof module !== 'undefined') {
   module.exports = {
     AI_INTENTS, AI_ACTIONS, AI_HUMAN_INTENTS, AI_DECISION_SCHEMA, AI_RULES, AI_WINDOWS, AI_STOP_WORDS, AI_WORKFLOW,
+    AI_PRIORITIES, AI_RISK_FLAGS, AI_INFO_INTENTS, AI_INFO_ACTIONS, AI_NO_REPLY_INTENTS, AI_EMERGENCY, aiNum, aiStaffNote, aiEmergencyIn, aiTriage, aiTraceText,
     aiClean, aiLine, aiIst, aiIstMs, aiDayLabel, aiHHMM, ai12h, aiSettings, aiProfile, aiKnowledge, aiCalendar, aiFreeSlots,
     aiLeadAppointments, aiHistory, aiContext, aiGates, aiClinicFacts, aiFacts, aiBuildRequest, aiParseResponse, aiValidateDecision,
     aiTimesIn, aiAmountsIn, aiAllowedFacts, aiCheckReply, aiCalOrigin, aiBookingLink, aiFillLinks, aiEmptyPlan, aiToHandoff,

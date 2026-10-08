@@ -168,7 +168,7 @@ test('structure: credentials, placeholders, no secrets; only W12 talks to Meta',
   assert.deepStrictEqual(phones, [], 'only made-up 9000000xxx numbers');
   const cfg = Object.fromEntries(node(w, 'W13 – Config').parameters.assignments.assignments.map((a) => [a.name, a.value]));
   const model = PROVIDER === 'anthropic' ? { anthropic_model: 'claude-haiku-4-5' } : { model_provider: 'openrouter', openrouter_model: 'openai/gpt-4o-mini' };
-  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', ...model, w12_workflow_id: 'PASTE_W12_WORKFLOW_ID', min_confidence: 0.7, max_ai_replies_per_hour: 6, history_limit: 12, slot_days: 7, pause_on_handoff: false, staff_alert_template: 'human_handoff_alert' });
+  assert.deepStrictEqual(cfg, { grist_base_url: 'http://grist:8484', registry_doc_id: 'fAft6pAYwFUU', leads_table: 'LEADS', ...model, w12_workflow_id: 'PASTE_W12_WORKFLOW_ID', min_confidence: 0.65, confidence_auto: 0.8, confidence_write: 0.85, max_ai_replies_per_hour: 6, history_limit: 12, slot_days: 7, pause_on_handoff: false, staff_alert_template: 'human_handoff_alert' });
   const calls = w.nodes.filter((x) => x.type === 'n8n-nodes-base.executeWorkflow');
   assert.deepStrictEqual(calls.map((x) => [x.name, x.parameters.workflowId.value, x.parameters.mode, x.parameters.options.waitForSubWorkflow !== false, x.onError]), [
     ['W13 – Run Each Test', '={{ $workflow.id }}', 'each', true, 'continueRegularOutput'],
@@ -214,7 +214,7 @@ test('1. NEW lead "Hi, I want to know about your services." -> lead created, ser
   const out = outRows(x.g);
   assert.deepStrictEqual(out.map((o) => [o.Conversation, o.Sent_By, o.WA_Message_ID, o.Template]), [[conv(x.g, `+${P_NEW}`).id, 'W13-ai-receptionist', 'wamid.SENT.1', '']]);
   assert.deepStrictEqual(conv(x.g, `+${P_NEW}`).Last_Intent, 'services_info');
-  assert.deepStrictEqual(logsOf(x.g, 'W13-ai-receptionist').map((r) => [r.Outcome, r.Record.replace(/wamid\.IN\.\w+/, 'wamid')]), [['ok', `${l.Lead_id} wamid services_info -> reply (replied)`]]);
+  assert.deepStrictEqual(logsOf(x.g, 'W13-ai-receptionist').map((r) => [r.Outcome, r.Record.replace(/wamid\.IN\.\w+/, 'wamid').replace(/ \d+ms /, ' Nms ')]), [['ok', `${l.Lead_id} wamid services_info -> reply (replied) | gate=ai ${PROVIDER === 'openrouter' ? 'openai/gpt-4o-mini' : 'claude-haiku-4-5'} Nms tok 1000/200`]]);
   assert.deepStrictEqual(logsOf(x.g, 'W2-WhatsApp-Inbound').map((r) => r.Outcome), ['ok']);
   const req = x.claude.calls[0].body;
   assert(/new contact: yes/.test(req.system[2].text) && /\[K1\] \(services\) Knee pain physiotherapy/.test(req.system[1].text));
@@ -428,7 +428,7 @@ if (!process.env.W13_NO_MUTATIONS) {
   const mutations = {
     'the fact check is off': (w) => code(w, 'W13 – Plan', 'const problems = aiCheckReply(d.reply, aiAllowedFacts(x), { skipTimes: slotAction });', 'const problems = [];'),
     'complaints / payments / medical are not forced to a person': (w) => code(w, 'W13 – Plan', 'if (AI_HUMAN_INTENTS.includes(d.intent))', 'if (false)'),
-    'low confidence is accepted': (w) => code(w, 'W13 – Plan', 'if (d.confidence < minConf)', 'if (false)'),
+    'low confidence is accepted': (w) => code(w, 'W13 – Plan', 'if (d.confidence < tLow)', 'if (false)'),
     'invented slots are not replaced': (w) => code(w, 'W13 – Plan', 'if (aiTimesIn(plan.reply).some((readings) => !readings.some((m) => okTimes.has(m) || m === x.slots.open || m === x.slots.close))) {', 'if (false) {'),
     'the message is not claimed (re-runs reply again)': (w) => code(w, 'W13 – Build Context', "if (!c.dry_run && c.ai_status && !(c.retry && c.ai_status === 'deferred'))", 'if (false)'),
     'Needs_Human is ignored': (w) => code(w, 'W13 – Build Context', 'if (c.needs_human)', 'if (false)'),

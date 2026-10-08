@@ -10,10 +10,14 @@ Patient WhatsApp ─► Meta ─► W2  (answers Meta 200, stores lead / convers
                             W13 ─ read: clinic (Agency Registry), Settings, Knowledge, the message, its conversation + lead,
                              │        last 40 messages, Booked appointments  ──►  free slots computed in CODE
                              ├─ gates (no AI): already handled · STOP · ai_mode off · opted out · paused · Needs_Human ·
-                             │                 staff already answered · newer message · night (defer) · media · rate limit
+                             │                 staff already answered · newer message · EMERGENCY words (→ URGENT hand-off) ·
+                             │                 night (defer) · media · rate limit
                              ├─ claim: Messages.AI_Status = processing   (no double replies)
                              ├─ Claude Haiku: ONE structured JSON decision (intent, action, reply, confidence, needs_human…)
-                             ├─ checks in CODE: schema · confidence ≥ 0.7 · complaint/payment/medical/human → person ·
+                             ├─ checks in CODE: schema · triage (urgent / any risk flag → person) · confidence tiers (< 0.65 person,
+                             │                 0.65-0.80 informational answers only, appointment writes ≥ 0.85) · negative mood →
+                             │                 informational only · no_reply only for thanks / not interested ·
+                             │                 complaint/payment/medical/human → person ·
                              │                 fact check (prices, times, links, phone numbers must come from the facts) ·
                              │                 slots must be really free · links filled by code, never typed by the AI
                              ├─ appointment writes first (direct booking / WhatsApp-booked cancel); failure → person
@@ -53,8 +57,8 @@ the simulator (`n8n/tests/n8n-sim.js`: Claude calls, calls into other workflows)
 | **W12** (the only WhatsApp sender) | W13 sends ONLY through W12, by calling the master workflow (whose W12 section is its only Execute Workflow Trigger). W12 got one new ability (A-01): free text inside the 24 h window. |
 | **W4** (Cal.com → Appointments) | Grist stays the source of truth: W13 reads Booked appointments to compute free slots. In the default `link` mode the patient confirms on Cal.com and W4 writes the booking; cancel / reschedule links point at Cal.com, and W4 records the change. |
 | **W5** (reminders) | Any Booked row, including W13's `direct` bookings (`Booking_UID wa-…`), gets the normal reminders. |
-| **W3** (speed to lead) | A real AI answer sets the lead to **Contacted**, so W3 stops chasing staff. A hand-off does NOT (the lead stays New: W3 keeps chasing). |
-| **W6** (follow-ups) | "I'll think about it" sets **Next_Action_At**; W6's mark-Lost skips leads with a future Next_Action_At. (See limitation 4 for W6's day-2 message.) |
+| **W3** (speed to lead) | A real AI answer sets the lead to **Contacted**, so W3 stops chasing staff. A hand-off leaves the lead New, but once its staff alert is **delivered** W13 sets **Escalated**, so W3 does not alert again; if the alert failed, W3 still escalates. (A6, live workflow: W3 also orders hot → warm → cold, skips conversations with Automation_Paused / Assigned_To, and puts AI_Summary in its staff message.) |
+| **W6** (follow-ups) | "I'll think about it" sets **Next_Action_At**; W6's mark-Lost skips leads with a future Next_Action_At, and (A5, live workflow) the day-2 follow-up skips it too. |
 | **W11** (errors) | Point W13's error workflow at the master; a failed CRM write after the reply stops W13 with an error, so you get the alert. |
 
 **Why a separate workflow and not inside W2 or the master:** W2 must answer Meta within seconds and stays simple. The master
@@ -70,11 +74,20 @@ One request per message to `claude-haiku-4-5` with **structured output** (the JS
 | `intent` | greeting, services_info, pricing, location_hours, availability_check, book_appointment, reschedule_appointment, cancel_appointment, appointment_status, follow_up_later, not_interested, thanks_ack, complaint, human_request, payment_issue, medical_question, other |
 | `action` | reply, offer_slots, book_slot, cancel_appointment, reschedule_appointment, schedule_follow_up, handoff, no_reply |
 | `needs_human`, `handoff_reason` | true + why, when a person must answer |
-| `confidence` | 0–1; below `min_confidence` (0.7) = a person answers |
+| `confidence` | 0–1; below `min_confidence` (0.65) = a person answers; below `confidence_auto` (0.8) only informational answers (greeting, services, prices, location / hours, availability, appointment status, thanks) go out; Grist appointment writes need `confidence_write` (0.85) |
 | `sentiment`, `language`, `lead_stage` | positive/neutral/negative · the patient's language · cold/warm/hot |
 | `reply` | the WhatsApp text (patient's language, ≤ 3 sentences); links only as `{{BOOKING_LINK}}`, `{{CANCEL_LINK}}`, `{{RESCHEDULE_LINK}}` |
 | `booking` | `{date, time, time_window}`: dates copied from the CALENDAR the prompt gives (the AI never computes a date) |
 | `appointment_ref`, `follow_up_days`, `kb_refs`, `likely_service`, `lead_summary` | which appointment (A1…), follow-up delay, the knowledge rows used, service title, a 1–2 sentence summary for the CRM |
+| `priority`, `risk_flags`, `staff_note` | triage for staff: urgent / high / normal · any of emergency, complaint, payment, medical, legal, abusive, sensitive (any flag = a person answers) · ≤ 200 characters for the hand-off alert (links and numbers are removed in code) |
+
+Before the AI is asked, unambiguous emergency phrases (chest pain, can't breathe, unconscious, fainted, heavy bleeding, suicide…, in
+English, Hinglish and Hindi) hand the message to staff as **URGENT**: the patient gets the normal hand-off reply, staff get
+`human_handoff_alert` with "URGENT · Possible emergency…". Physio words such as stroke, paralysis, fracture or accident are not on
+that list. W12's quiet hours still apply: an emergency written at night is alerted at 08:05.
+
+Every run writes a trace to Run_Log > Record (`| gate=ai openai/gpt-4o-mini 1234ms tok 3100/210`, `fallback` when the AI answer
+was unusable), and AI_Reason starts with `[urgent · complaint]`-style tags and `fallback:` where they apply.
 
 The prompt contains ONLY facts W13 computed or read: clinic name, booking mode, the Knowledge rows, a 7-day calendar, the free
 start times, the patient's name / CRM status / earlier summary, their upcoming appointments and the last 12 messages.
@@ -153,7 +166,7 @@ When the AI hands a conversation to a person, staff answer from the Grist Inbox,
 1. **Not tested with the real Claude or a real Meta / Grist.** The simulator proves the wiring and the rules; it cannot prove how well Haiku understands Hinglish. Step 8 is that test.
 2. **CLAUDE.md rule 8** conflicts with "the AI replies" (section 2). Update it if you agree; I did not.
 3. **The 24-hour window.** Free text works only within 24 h of the patient's last message (minus a 5-min margin); W12 refuses free text after that. With TEST_MODE on, the reply goes to TEST_PHONE, and Meta checks the window for THAT number, so Meta may reject it (131047) unless TEST_PHONE has written to the clinic number in the last 24 h.
-4. **W6's day-2 follow-up ignores Lead_Stage and Next_Action_At.** A patient who said "not interested", or "ask me next week", can still get `followup_day2`. A one-line filter in W6 fixes this. I did not change W6 (you asked me not to rebuild the existing workflows). Say if you want it.
+4. **W6's day-2 follow-up** now skips Needs_Human, Lead_Stage cold, Last_Intent not_interested / opt_out, a future Next_Action_At and a patient message in the last 48 h. This is done in your live workflow by `n8n/integrated/apply-ai-os.js` (A5); the standalone W6 export in `n8n/workflows/` is unchanged.
 5. **No new-lead staff alert when the AI answers.** W2's `new_lead_staff_alert` payload is still only prepared. Staff are alerted on hand-offs, and they see everything else in Grist.
 6. **The claim is not atomic.** Grist has no compare-and-set, so two W13 runs started within milliseconds for the SAME message could both pass the check. W2 never does that (one run per new WA_Message_ID); it could only happen if someone re-runs an execution by hand at the same moment.
 7. **Booking races.** In `direct` mode, two patients who take the same free slot at the same second can both get it, because capacity is checked when the facts are read. `link` mode (the default) leaves booking to Cal.com.
