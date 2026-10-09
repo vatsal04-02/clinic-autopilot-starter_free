@@ -9,7 +9,7 @@ const assert = require('assert');
 const args = process.argv.slice(2);
 const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const REPO = path.join(__dirname, '..', '..');
-const FILE = arg('--file', path.join(__dirname, 'clinic-autopilot-master-ai.json'));
+const FILE = arg('--file', path.join(__dirname, 'clinic-autopilot-master-ai.stage1.json'));
 const SOURCE = arg('--source', path.join(__dirname, 'source', 'master-export.redacted.json'));
 const PRIVATE = args.includes('--private');
 const T = {

@@ -17,6 +17,7 @@ const files = [
   path.join(root, 'integrated', 'validate-handoff-gate.js'),
   path.join(root, 'integrated', 'validate-w7-w10.js'),
   path.join(root, 'integrated', 'validate-quiet-hours-switch.js'),
+  path.join(root, 'integrated', 'validate-w13-prompt.js'),
   ...fs.readdirSync(path.join(root, 'integrated')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'integrated', f)),
 ];
 

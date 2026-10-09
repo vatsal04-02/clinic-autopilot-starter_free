@@ -33,10 +33,11 @@ if (!LINE.test(TEMPLATE)) fail('the snippet has no DISABLE_QUIET_HOURS_FOR_TEST 
 const block = (v) => TEMPLATE.replace(LINE, `const DISABLE_QUIET_HOURS_FOR_TEST = ${v};`);
 
 // The 7 nodes: fingerprint of the W7-W10 version, and the line the switch goes right before (after the pasted helpers).
+// The two W13 nodes also accept their W13 prompt v2.1 version (apply-w13-prompt.js changes only the pasted ai-receptionist.js block).
 const TARGETS = {
   'W12 – Prepare request': ['6ba9ea4adcb8c857', '  const cfg = {\n    send_mode'],
-  'W13 – Build Context': ['c99da5e795fe4b67', 'const h = { normalizeIndianPhone, decideSend, inQuietHours, parseClock, parseDays };'],
-  'W13 – Plan Ready': ['806be7b2ca2ffc44', 'const h = { normalizeIndianPhone, decideSend, inQuietHours, parseClock, parseDays };'],
+  'W13 – Build Context': [['c99da5e795fe4b67', '90713c448df91172'], 'const h = { normalizeIndianPhone, decideSend, inQuietHours, parseClock, parseDays };'],
+  'W13 – Plan Ready': [['806be7b2ca2ffc44', 'bfc908a99accf824'], 'const h = { normalizeIndianPhone, decideSend, inQuietHours, parseClock, parseDays };'],
   'W7 – Decide send': ['d821944e8d49fb24', '// ---- this node ----'],
   'W8 – Decide send': ['d821944e8d49fb24', '// ---- this node ----'],
   'W9 – Owner message': ['41509458b5d0a377', '// ---- this node ----'],
@@ -57,7 +58,7 @@ for (const [name, [want, anchor]] of Object.entries(TARGETS)) {
   const m = found.length ? 'set' : 'insert';
   if (mode && mode !== m) fail(`some of the 7 nodes have the switch and some do not (${name}: ${m})`);
   mode = m;
-  if (sha(base) !== want) fail(`"${name}" is not the expected version (fingerprint ${sha(base)}, expected ${want}): it was edited in n8n. Re-export and re-check.`);
+  if (![].concat(want).includes(sha(base))) fail(`"${name}" is not the expected version (fingerprint ${sha(base)}, expected ${want}): it was edited in n8n. Re-export and re-check.`);
   const at = base.split(anchor).length - 1;
   if (at !== 1) fail(`${name}: the insertion point was found ${at} times (expected once)`);
   n.parameters.jsCode = base.replace(anchor, () => `${block(VALUE)}${anchor}`);

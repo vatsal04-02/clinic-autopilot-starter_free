@@ -26,7 +26,7 @@ const crypto = require('crypto');
 const args = process.argv.slice(2);
 const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const IN = arg('--in');
-const OUT = arg('--out', path.join(__dirname, 'clinic-autopilot-master-ai.json'));
+const OUT = arg('--out', path.join(__dirname, 'clinic-autopilot-master-ai.stage1.json'));   // stage 1 of the master (W1-W6, W11-W13); the full master is clinic-autopilot-master-ai.json
 const KEEP_PRIVATE = args.includes('--keep-private');
 const REDACT_ONLY = args.includes('--redact-only');
 if (!IN) { console.error('usage: node build-integrated.js --in <master export.json> [--out file] [--keep-private] [--redact-only]'); process.exit(1); }

@@ -1,4 +1,4 @@
-// End-to-end tests of the INTEGRATED master (clinic-autopilot-master-ai.json): ONE workflow, ONE execution path.
+// End-to-end tests of the INTEGRATED master, stage 1 (clinic-autopilot-master-ai.stage1.json): ONE workflow, ONE execution path.
 //   Meta webhook -> W2 (store) -> this workflow again with w13_job (no wait) -> "W12 – AI Job?" -> SECTION W13 (OpenRouter AI,
 //   gates, checks, CRM) -> this workflow again (wait) -> "W12 – AI Job?" -> W12 (the only WhatsApp sender) -> fake Meta.
 // Fake Grist, fake Meta, fake OpenRouter (n8n/tests/ai-fixtures.js: it reads the real prompt). Made-up numbers only.
@@ -11,7 +11,7 @@ const { spawnSync } = require('child_process');
 const { simulate, FakeGrist, COLUMNS, CHOICES, DATETIME, TOGGLE } = require('../tests/n8n-sim');
 const F = require('../tests/ai-fixtures');
 
-const FILE = process.env.INTEGRATED_FILE || path.join(__dirname, 'clinic-autopilot-master-ai.json');
+const FILE = process.env.INTEGRATED_FILE || path.join(__dirname, 'clinic-autopilot-master-ai.stage1.json');
 const BASE = JSON.parse(fs.readFileSync(FILE, 'utf8'));
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const ok = (m) => console.log(`  ok  ${m}`);
