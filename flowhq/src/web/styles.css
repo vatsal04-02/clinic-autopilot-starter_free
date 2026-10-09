@@ -1,0 +1,66 @@
+/* FLOW HQ design language: near-black surfaces, one electric blue, white type. Industry never changes these tokens. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root, [data-theme='dark'] {
+  --bg: 5 7 11;            /* #05070B */
+  --bg-2: 8 11 18;         /* #080B12 */
+  --surface: 13 17 26;     /* #0D111A */
+  --surface-2: 17 23 34;   /* #111722 */
+  --elevated: 21 28 40;    /* #151C28 */
+  --line: 29 39 53;        /* #1D2735 */
+  --line-2: 38 50 68;
+  --fg: 245 247 250;       /* #F5F7FA */
+  --fg-2: 154 166 178;     /* #9AA6B2 */
+  --muted: 102 112 133;    /* #667085 */
+  --blue: 22 119 255;      /* #1677FF */
+  --blue-bright: 59 141 255; /* #3B8DFF */
+  --blue-soft: 125 178 255;  /* #7DB2FF */
+  --ok: 34 197 94;
+  --warn: 245 158 11;
+  --bad: 239 68 68;
+  color-scheme: dark;
+}
+[data-theme='light'] {
+  --bg: 247 249 252;
+  --bg-2: 241 244 249;
+  --surface: 255 255 255;
+  --surface-2: 248 250 253;
+  --elevated: 255 255 255;
+  --line: 228 233 242;
+  --line-2: 210 218 230;
+  --fg: 11 18 32;
+  --fg-2: 79 93 112;
+  --muted: 120 132 150;
+  --blue: 22 119 255;
+  --blue-bright: 59 141 255;
+  --blue-soft: 22 100 220;
+  --ok: 22 163 74;
+  --warn: 217 119 6;
+  --bad: 220 38 38;
+  color-scheme: light;
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body { @apply bg-bg text-fg antialiased; font-feature-settings: 'cv11', 'ss01', 'ss03'; }
+  ::selection { background: rgb(var(--blue) / 0.35); }
+  *:focus-visible { outline: 2px solid rgb(var(--blue-bright)); outline-offset: 2px; border-radius: 6px; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: rgb(var(--line-2)); border-radius: 999px; border: 3px solid rgb(var(--bg)); }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+@layer components {
+  .card { @apply rounded-xl border border-line bg-surface shadow-card transition-colors duration-200; }
+  .card-hover { @apply hover:border-line-2 hover:bg-surface-2; }
+  .num { font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+  .label { @apply text-[11px] font-medium uppercase tracking-[0.08em] text-muted; }
+  .glow-blue { box-shadow: 0 0 0 1px rgb(var(--blue) / 0.28), 0 0 28px -6px rgb(var(--blue) / 0.45); }
+  .ai-tint { background: linear-gradient(180deg, rgb(var(--blue) / 0.10), rgb(var(--blue) / 0.04)); border-color: rgb(var(--blue) / 0.28); }
+  .skeleton { background: linear-gradient(90deg, rgb(var(--surface-2)) 0%, rgb(var(--elevated)) 40%, rgb(var(--surface-2)) 80%); background-size: 800px 100%; @apply animate-shimmer rounded-md; }
+  .btn-primary { background-image: linear-gradient(180deg, rgb(var(--blue-bright)), rgb(var(--blue))); }
+  .bg-grid { background-image: radial-gradient(rgb(var(--line)) 1px, transparent 1px); background-size: 22px 22px; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
