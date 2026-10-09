@@ -10,7 +10,7 @@ const arg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] :
 const PRIVATE = args.includes('--private');
 const ORIG = arg('--orig', path.join(__dirname, 'source', 'ai-updated-workflow-clinic.final-v1.redacted.json'));
 const PATCHED = arg('--patched', path.join(__dirname, 'clinic-autopilot-master-ai.json'));
-const RELEASE = path.join(__dirname, 'ai-updated-workflow-clinic.w13-v2.1.json');   // the named release copy of the master
+const RELEASE = path.join(__dirname, 'ai-updated-workflow-clinic.w13-v2.2.json');   // the named release copy of the master
 const A = JSON.parse(fs.readFileSync(ORIG, 'utf8'));
 const B = JSON.parse(fs.readFileSync(PATCHED, 'utf8'));
 const byName = (w) => Object.fromEntries(w.nodes.map((n) => [n.name, n]));
@@ -81,9 +81,9 @@ group('7. nothing secret or placeholder-like added', () => {
   must(count(B) === count(A), `${count(A)} -> ${count(B)}`);
   return `${count(A)} existing placeholder/marker strings, unchanged`;
 });
-if (!args.includes('--patched')) group('8. the release copy ai-updated-workflow-clinic.w13-v2.1.json is byte-identical to the master', () => {
+if (!args.includes('--patched')) group('8. the release copy ai-updated-workflow-clinic.w13-v2.2.json is byte-identical to the master', () => {
   must(fs.existsSync(RELEASE), 'release copy missing');
   must(fs.readFileSync(RELEASE, 'utf8') === fs.readFileSync(PATCHED, 'utf8'), 'release copy differs from clinic-autopilot-master-ai.json');
 });
-console.log(failed ? `\n${failed} CHECK GROUP(S) FAILED` : '\nW13 prompt v2.1: only the 4 pasted ai-receptionist.js blocks changed; all check groups pass');
+console.log(failed ? `\n${failed} CHECK GROUP(S) FAILED` : '\nW13 prompt v2.2: only the 4 pasted ai-receptionist.js blocks changed; all check groups pass');
 process.exit(failed ? 1 : 0);

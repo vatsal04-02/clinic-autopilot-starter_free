@@ -1,8 +1,8 @@
 # Clinic Autopilot master with the AI receptionist integrated
 
 > **Which file is the master now.** `clinic-autopilot-master-ai.json` is the **complete workflow** (323 nodes: W1–W13, W7–W10,
-> the AI receptionist with **prompt v2.1**), made from your latest export "ai updated workflow clinic final v1". It is the same file as
-> `ai-updated-workflow-clinic.w13-v2.1.json`. Its changes and tests are in **`W13-PROMPT-V2.1.md`** (section 11).
+> the AI receptionist with **prompt v2.2**), made from your latest export "ai updated workflow clinic final v1". It is the same file as
+> `ai-updated-workflow-clinic.w13-v2.2.json`. Its changes and tests are in **`W13-PROMPT-V2.1.md`** (section 11).
 > Sections 1–5 below describe the first integration stage (246 nodes), which is now kept as `clinic-autopilot-master-ai.stage1.json`.
 
 This is your live master, "1 clinic total workflow" (W1, W2, W3, W4, W5, W6, W11, W12), with the AI receptionist built in as
@@ -219,17 +219,17 @@ The full change report, architecture, settings, test results and the manual step
 
 `apply-quiet-hours-switch.js` pastes one switch into the 7 nodes that apply quiet hours in W12, W13 and W7–W10, and flips it later (`--value false`). Details, the node list and the tests are in `QUIET-HOURS-SWITCH.md`. The test file is `ai-updated-workflow-clinic.quiet-hours-test.json`, with the switch ON. Switch it off when testing is done.
 
-## 11. W13 receptionist prompt v2.1: the complete master
+## 11. W13 receptionist prompt v2.1 / v2.2: the complete master
 
 The changes, the guards, the test results and the steps before import are in **`W13-PROMPT-V2.1.md`**.
 
 | File | What it is |
 |---|---|
-| `clinic-autopilot-master-ai.json` | **The master**: your export "ai updated workflow clinic final v1" (323 nodes) with W13 prompt v2.1 in place of the old W13 code. Public copy (redacted), saved inactive. |
-| `ai-updated-workflow-clinic.w13-v2.1.json` | The same file under its release name (byte-identical, checked by `validate-w13-prompt.js`). |
+| `clinic-autopilot-master-ai.json` | **The master**: your export "ai updated workflow clinic final v1" (323 nodes) with W13 prompt v2.2 (v2.1 + routine questions answered from the knowledge base) in place of the old W13 code. Public copy (redacted), saved inactive. |
+| `ai-updated-workflow-clinic.w13-v2.2.json` | The same file under its release name (byte-identical, checked by `validate-w13-prompt.js`). |
 | `source/ai-updated-workflow-clinic.final-v1.redacted.json` | Your export, redacted for this public repository. Both files above are made from it. |
 | `apply-w13-prompt.js` | `node n8n/integrated/apply-w13-prompt.js --in <export> [--out <file>] [--keep-private]`. Fingerprint-checked; swaps only the pasted `ai-receptionist.js` block in the 4 W13 Code nodes that hold it. Default output: the master. |
 | `validate-w13-prompt.js` | 8 check groups, before vs after: 0 nodes added / removed, connections identical, only the 4 blocks changed, quiet-hours switch, model and secrets unchanged, release copy identical. Add `--private --orig <export> --patched <file>` for your own pair. |
-| `../snippets/ai-prompt.test.js` | 7 groups: the prompt rules, Hindi / Hinglish prices and times, booking claims, full replies, safety routes, injection and malformed answers. |
-| `../w13/eval-prompt.js` | 24 made-up patient messages against the real model, checked by W13's own code. Needs your OpenRouter key; **not run here**. |
+| `../snippets/ai-prompt.test.js` | 8 groups: the prompt rules, Hindi / Hinglish prices and times, booking claims, full replies, safety routes, injection and malformed answers, routine questions answered from the knowledge base. |
+| `../w13/eval-prompt.js` | 26 made-up patient messages against the real model, checked by W13's own code. Needs your OpenRouter key; **not run here**. |
 | *your private import file* | The same master with your own values kept exactly as exported. Sent to you directly, never committed. |

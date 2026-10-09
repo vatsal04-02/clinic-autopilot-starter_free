@@ -8,7 +8,7 @@
 //   OPENROUTER_MOCK=1 node n8n/w13/eval-prompt.js      (no network: the test fake answers; checks this script only)
 //
 // The key is read from the environment and never printed. The only endpoint called is the one W13 – Ask Model calls.
-// Cost: 24 calls of about 4-5k input and up to --max-tokens output tokens each (thinking included).
+// Cost: 26 calls of about 4-5k input and up to --max-tokens output tokens each (thinking included).
 const fs = require('fs');
 const path = require('path');
 const ai = require('../snippets/ai-receptionist');
@@ -48,14 +48,21 @@ function context(text, o = {}) {
 
 const DEV = /[ऀ-ॿ]/;
 const handoff = (p) => p.route === 'handoff';
+// Routine questions (v2.2): answered directly, needs_human false, kb_refs = the entries used (K-numbers of active entries only).
+const first = (...r) => r.find((v) => v !== true) ?? true;   // the first failed check's reason, else true
+const KB_REFS = F.KNOWLEDGE.filter((k) => k.fields.Active !== false).map((k) => `K${k.id}`);
+const routine = (p, d, refs) => (p.route === 'reply' && d.action === 'reply' && d.needs_human === false && !d.risk_flags.length
+  && refs.every((r) => d.kb_refs.includes(r)) && d.kb_refs.every((r) => KB_REFS.includes(r))) || `routine -> reply, needs_human false, no flags, kb_refs with ${refs.join(' + ')} (got ${d.action}, ${d.needs_human}, [${d.kb_refs}])`;
 // [id, message, options, expectation(plan, decision) -> true or a reason]
 const CASES = [
   ['E1', 'Hi', {}, (p, d) => (p.route === 'reply' && d.intent === 'greeting') || 'greeting -> reply'],
   ['H1', 'नमस्ते', {}, (p, d) => (p.route === 'reply' && DEV.test(p.reply)) || 'Hindi greeting -> Devanagari reply'],
   ['G1', 'Hello ji, kaise ho aap log?', {}, (p) => (p.route === 'reply' && !DEV.test(p.reply)) || 'Hinglish greeting -> Latin-script reply'],
-  ['E2', 'How much is the first assessment?', {}, (p) => (p.route === 'reply' && /500/.test(p.reply)) || 'KB price ₹500'],
-  ['G2', 'first assessment kitne ka hai?', {}, (p) => (p.route === 'reply' && /500/.test(p.reply) && !DEV.test(p.reply)) || 'Hinglish price ₹500 in Latin script'],
-  ['H2', 'आप किस समय खुले रहते हैं?', {}, (p) => (p.route === 'reply' && DEV.test(p.reply)) || 'Hindi opening hours'],
+  ['E2', 'How much is the first assessment?', {}, (p, d) => first(/500/.test(p.reply) || 'KB price ₹500', routine(p, d, ['K3']))],
+  ['G2', 'first assessment kitne ka hai?', {}, (p, d) => first((/500/.test(p.reply) && !DEV.test(p.reply)) || 'Hinglish price ₹500 in Latin script', routine(p, d, ['K3']))],
+  ['H2', 'आप किस समय खुले रहते हैं?', {}, (p, d) => first(DEV.test(p.reply) || 'Hindi opening hours in Devanagari', routine(p, d, ['K4']))],
+  ['E14', 'What services do you offer?', {}, (p, d) => routine(p, d, ['K1', 'K2'])],
+  ['E15', 'What time do you open on Saturday?', {}, (p, d) => first(/\b9\b|09:00/.test(p.reply) || 'KB opening time 9 AM', routine(p, d, ['K4']))],
   ['G3', 'kal shaam 5:30 baje aa sakta hoon?', {}, (p) => (['book_slot', 'offer_slots'].includes(p.route) && !/\b(booked|book ho gay|confirm ho gay)/i.test(p.reply)) || 'free slot, link mode: no "booked" claim'],
   ['E3', 'Can I come tomorrow at 5 PM?', {}, (p) => (['offer_slots', 'book_slot'].includes(p.route) && !/\b5(:00)?\s?PM\b|17:00/.test(p.reply.replace(/5:30/g, ''))) || 'taken 17:00 is not offered'],
   ['E4', 'Please book me tomorrow at 5:30 PM', { settings: { booking_mode: 'direct' } }, (p) => (p.route === 'book_slot' && !!p.booked) || 'direct mode books 17:30'],
