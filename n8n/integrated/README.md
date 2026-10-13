@@ -233,3 +233,17 @@ The changes, the guards, the test results and the steps before import are in **`
 | `../snippets/ai-prompt.test.js` | 8 groups: the prompt rules, Hindi / Hinglish prices and times, booking claims, full replies, safety routes, injection and malformed answers, routine questions answered from the knowledge base. |
 | `../w13/eval-prompt.js` | 26 made-up patient messages against the real model, checked by W13's own code. Needs your OpenRouter key; **not run here**. |
 | *your private import file* | The same master with your own values kept exactly as exported. Sent to you directly, never committed. |
+
+## 12. MISSED_CALL_CAPTURE and W12 simulate mode (demo / local)
+
+A webhook, `POST /webhook/missed-call`, turns a missed call into a lead, an Inbox entry, a staff alert and a **simulated** acknowledgement. W12 gets a `simulate` send mode that runs every guard and then stops: no network, no Meta credential, never "delivered". The full description, request contract, states and limits are in **`MISSED-CALL-CAPTURE.md`**.
+
+| File | What it is |
+|---|---|
+| `clinic-autopilot-master-ai.missed-call-demo.json` | The master (unchanged) + the `MISSED_CALL_CAPTURE` section (57 `MCC –` nodes, 1 webhook, 1 five-minute retry) + W12 simulate mode with `w12_send_mode = simulate`. Public copy, saved inactive. **For a separate local n8n, never over the live workflow.** |
+| `apply-missed-call-capture.js` | `node n8n/integrated/apply-missed-call-capture.js --in <export> [--out <file>] [--demo] [--secret <value>] [--keep-private]`. Fingerprint-checked: refuses and writes nothing if the pasted `wa-send.js` block or any anchor differs. Without `--demo` the W12 mode is left as it is. |
+| `validate-missed-call-capture.js` | 11 check groups, before vs after: 0 nodes removed, only 3 W12 code nodes + W12 Config (+ 2 section notes) changed, credentials and existing webhooks identical, W12 still the only sender, simulate path has no HTTP node, no secret in the file. |
+| `missed-call-capture.test.js` | 22 end-to-end checks on the shipped JSON in the simulator (auth, validation, tenant isolation, dedupe, retries, quiet hours, opt-out, simulate leak tests, scheduled retry). |
+| `missed-call-capture-mutations.test.js` | 20 deliberate breaks of those rules; each must make the end-to-end test fail. |
+| `../snippets/call-events.js`, `wa-simulate.js` (+ tests) | The pure functions pasted into the nodes. `wa-send.js` itself is unchanged. |
+| `../mcc/sections.js`, `../mcc/code/` | The node builder and the Code-node sources. |

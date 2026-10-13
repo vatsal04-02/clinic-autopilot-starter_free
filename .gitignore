@@ -2,3 +2,4 @@
 *.grist
 backups/
 node_modules/
+*.local.json

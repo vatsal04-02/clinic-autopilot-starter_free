@@ -75,6 +75,13 @@ the reason in AI_Reason (Send stays unticked: fix it and tick again). Quiet hour
 Opted_Out, an invalid phone, an empty body or a last patient message older than 24 h (WhatsApp only allows templates then) stop
 it with the reason on the row. Rows written by W12 / W13 have Send = false and are never sent again.
 
+**Missed-call event rows (MISSED_CALL_CAPTURE).** A missed call is stored as ONE Messages row so the existing Inbox shows it and Messages.WA_Message_ID (unique) is the idempotency key:
+`Direction In`, `Template missed_call`, `WA_Message_ID call-<provider_call_id>` (a losing concurrent copy is renamed `call-<id>-dup-<row id>`), `Status Received`, `Sent_By MCC-missed-call`, `Intent missed_call`,
+`Body` = `[DEMO] Missed call (missed|busy) at <IST time>, rang <n>s` (the `[DEMO]` prefix only when `demo_mode` is true). Its state lives in the existing text columns: `AI_Action` = `mcc:claimed` → `mcc:ack_pending` →
+`mcc:ack_simulated` / `mcc:ack_sent` (Meta accepted; NOT "delivered") / `mcc:ack_deferred` (quiet hours) / `mcc:ack_failed` / `mcc:ack_skipped`; `AI_Reason` = the reason and try count. The row is not a WhatsApp message:
+W13 ignores it as a patient message and it never moves `Conversations.Last_Inbound_At` (that column opens WhatsApp's 24 h window). A simulated acknowledgement is a separate `Direction Out` row whose Body starts
+`[DEMO simulated, not sent]`, `Status queued`, `Sent_By` ends `[DEMO simulated: nothing was sent; would go to <number>]`.
+
 Set by W13 (AI receptionist) on the patient's message (Direction In) — the conversation memory and its audit trail:
 | Column | Type | Notes |
 |---|---|---|
@@ -101,7 +108,8 @@ Example rows: `n8n/w13/knowledge-base.sample.csv` (fake demo data: replace with 
 Key (Text), Value (Text). Rows: clinic_name, open_time, close_time, working_days, owner_phone,
 staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE,
 ai_mode, booking_mode, slot_minutes, booking_capacity, booking_notice_minutes, handoff_reply (W13, all optional),
-outcome_checkin, review_requests, weekly_report_whatsapp (W7, W8, W9; optional, missing = off)
+outcome_checkin, review_requests, weekly_report_whatsapp (W7, W8, W9; optional, missing = off),
+missed_call_enabled, demo_mode (MISSED_CALL_CAPTURE; optional, missing = off)
 
 How the workflows read the values:
 - `open_time`, `close_time`: 24-hour `09:00`, `19:30` (`9:00 AM` also works). Missing or unreadable = 08:00-21:00.
@@ -117,12 +125,15 @@ How the workflows read the values:
   `weekly_owner_report`) is approved for the clinic's WhatsApp number.
 - `review_link` (W8): the clinic's own review page (e.g. its Google review link). Must start with `https://`; W8 never makes one
   up: missing or not https = no review request, and a daily Run_Log warning (10:xx IST) says how many are waiting.
+- `missed_call_enabled` (MISSED_CALL_CAPTURE): `on` to capture missed calls for this clinic (lead + conversation + staff alert + acknowledgement). Missing or anything else = off (the webhook records one skipped Run_Log row and nothing else).
+- `demo_mode` (MISSED_CALL_CAPTURE): `true` adds a `[DEMO]` label to the call event, the Run_Log row and the lead notes. It does not change what is sent: that is decided by W12's `w12_send_mode` (`simulate` sends nothing).
 - `handoff_reply`: what the patient gets when a person takes over (default: "Thank you for your message. A member of our team will reply to you shortly.").
 
 ### Run_Log
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime). W13 writes one row per message it handles
 (`W13-ai-receptionist`, "Lead_id wamid intent -> action (status)"). W7 (`W7-outcome-nudge`) and W8 (`W8-review-request`) write
 one row per attempt ("Booking_UID Lead_id", ok / failed + W12's reason), W10 (`W10-staff-reply`) one per staff reply,
+MISSED_CALL_CAPTURE (`MCC-missed-call-capture`) one per event ("call-<id> -> <state>", ok / skipped / failed),
 W9 (`W9-weekly-report`) the weekly report itself (Record = the full report text; Error = why the AI text was not used, if so)
 and "owner WhatsApp <week>" when the owner copy is sent. For a Reports page: a card list of Run_Log filtered on
 Workflow = W9-weekly-report.
@@ -138,6 +149,7 @@ One doc, one table. Every workflow reads it first to find the clinic (see CLAUDE
 | Grist_Doc_ID | Text | the clinic's Grist doc id (the long id in the doc's URL) |
 | WA_Phone_Number_ID | Text | Meta WhatsApp phone_number_id; empty until WhatsApp is connected |
 | Active | Toggle | workflows ignore clinics where this is off |
+| Call_Number | Text | MISSED_CALL_CAPTURE (optional): the clinic's phone number that callers dial (any Indian format; matched on its last 10 digits). **The only thing that selects the clinic for a missed-call event** — the request body is never trusted. Empty = this clinic receives no call events. A number held by more than one active clinic is rejected as ambiguous. Add it as a Text column to the existing `Clinics` table; no data is lost if you do not |
 
 ## Pages
 1. **Today** — 4 card lists: Status = New; Next_Action_At ≤ today; tomorrow's Booked appointments; yesterday's No-show with Rebook_Sent empty
