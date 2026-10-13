@@ -270,3 +270,6 @@ W13 can ask a local Ollama instead of OpenRouter: no key, no cost, no paid API. 
 | `request-mode.test.js` | 16 end-to-end checks (R1–R16) incl. W5 reminders, W6–W9 equivalence, races, duplicates, claims |
 | `request-mode-mutations.test.js` | 15 deliberate breaks; each must make the end-to-end test fail |
 | `../snippets/ai-request-mode.js` (+ test) | The pure functions pasted into the two W13 nodes |
+| `apply-request-confirm.js` | `node n8n/integrated/apply-request-confirm.js --in <export> [--out <file>] [--keep-private]`. Adds the 25 `REQ –` nodes (every 2 minutes): staff-decided requests -> the patient is told through W12, a confirmation over a taken slot is refused. Changes no existing node |
+| `request-confirm.test.js`, `request-confirm-mutations.test.js` | 13 end-to-end checks (C1–C13) and 15 deliberate breaks |
+| `../snippets/request-confirm.js` (+ test), `../req/sections.js`, `../req/code/` | The rules (tested pure functions), the node builder and the node sources |

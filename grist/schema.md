@@ -137,6 +137,7 @@ How the workflows read the values:
 Workflow, Record, Outcome (Choice: ok, skipped, failed), Error, At (DateTime). W13 writes one row per message it handles
 (`W13-ai-receptionist`, "Lead_id wamid intent -> action (status)"). W7 (`W7-outcome-nudge`) and W8 (`W8-review-request`) write
 one row per attempt ("Booking_UID Lead_id", ok / failed + W12's reason), W10 (`W10-staff-reply`) one per staff reply,
+REQUEST_CONFIRM (`REQ-request-confirm`) one per attempt ("req-<wamid> confirmed|declined|conflict L-..."; `failed` + the reason when a confirmation was refused because the slot is taken, or the message could not go),
 MISSED_CALL_CAPTURE (`MCC-missed-call-capture`) one per event ("call-<id> -> <state>", ok / skipped / failed),
 W9 (`W9-weekly-report`) the weekly report itself (Record = the full report text; Error = why the AI text was not used, if so)
 and "owner WhatsApp <week>" when the owner copy is sent. For a Reports page: a card list of Run_Log filtered on

@@ -7,7 +7,7 @@
 1. The patient asks for one exact free day and time ("Book me for Saturday at 5").
 2. W13 writes ONE Appointments row: `Status = Requested`, `Booking_UID = req-<WhatsApp message id>`, `Requested_At = now`, `Lead`, `Service`, `Start`, `End`. The lead is **not** marked Booked.
 3. The patient gets a fixed text (written by code, not by the model): *"Thank you! We have noted your request for Sat 10 Oct at 5:00 PM. It is NOT confirmed yet: our team will check and confirm with you shortly."*
-4. Staff open Appointments in Grist and set `Status` to **Booked** (confirm) or **Declined**. Until then nothing else happens: no reminder, no report line, no follow-up. (Telling the patient is the job of the confirmation section described at the end of this page.)
+4. Staff open Appointments in Grist and set `Status` to **Booked** (confirm) or **Declined**. Until then nothing else happens: no reminder, no report line, no follow-up. The REQ section (§7) then tells the patient and refuses a confirmation that would double-book.
 
 ## 2. Safety rules (each is a test in `request-mode.test.js`, each is also broken on purpose in `request-mode-mutations.test.js`)
 
@@ -18,7 +18,7 @@
 | A request triggers nothing and is never counted as confirmed | W5 reminders, W6 follow-ups, W7 check-ins, W8 review requests and W9's numbers read exact statuses (`Booked`, `Completed`, `No-show`, ...), so a `Requested` / `Declined` row is invisible to them. R14 sends a 24 h reminder for a Booked row and none for the same row as Requested; R16 adds requests to the data and shows W5, W6, W7, W8 send exactly the same messages and W9 reports exactly the same numbers. (The weekly "Total" counted every row: `apply-request-mode.js` changes that ONE line in `W9 – Metrics`.) |
 | Two patients, one slot | A request **holds** its slot for `request_hold_hours` (default 24 h) so the next patient is not offered it and cannot request it (R6); it expires after that (R8). Capacity > 1 (`booking_capacity`) still leaves room |
 | One patient, one request | Asking for the same time again repeats the existing request instead of writing a second row; the same WhatsApp message can never write two (R7). At most `max_pending_requests` (default 2) at a time, then a person takes over |
-| A race nobody can prevent | Two patients can read the same free slot before either writes. Grist has no atomic insert. Both then hold a `Requested` row, **neither is Booked** (R9); the confirmation section (end of this page) lets only one become Booked |
+| A race nobody can prevent | Two patients can read the same free slot before either writes. Grist has no atomic insert. Both then hold a `Requested` row, **neither is Booked** (R9); the REQ section (§7) lets only one become Booked |
 | Cancel | The patient can cancel a request ("cancel my request"): the row becomes `Cancelled` (R10) |
 | Everything before the model | STOP, emergencies, hand-offs, `ai_mode` off / draft, the hourly limit and the staff-owns-the-chat rule are unchanged and still come first (R12). In `draft` mode the request row is still created for staff and the patient is not messaged |
 | A failed write is not promised | If the Grist write fails (for example the column `Requested_At` does not exist yet) the patient gets the holding reply and a person is alerted (R13) |
@@ -62,3 +62,23 @@ node n8n/snippets/ai-request-mode.test.js                  # pure functions
 node n8n/integrated/request-mode.test.js                   # the patched workflow end to end, R1–R16
 node n8n/integrated/request-mode-mutations.test.js         # 15 deliberate breaks, each must be caught
 ```
+
+## 7. The confirmation step (section `REQUEST_CONFIRM`, nodes `REQ –`, every 2 minutes)
+
+```
+node n8n/integrated/apply-request-confirm.js --in <workflow.json> [--out <file>] [--keep-private]
+```
+Adds 25 `REQ –` nodes and a sticky note; **nothing existing is changed** (C1). Only for clinics with `booking_mode = request`; only `Appointments` rows whose `Booking_UID` starts with `req-`; Cal.com and WhatsApp bookings are never looked at (C10).
+
+| Staff set the row to | and | the section |
+|---|---|---|
+| **Booked** | the slot is free | writes `Confirm_Sent` FIRST (so the patient is never told twice), then tells the patient through **W12** (free text in the 24 h window, else the approved `booking_confirmation` template), marks the lead Booked (never downgrades Booked / Converted), writes a `REQ-request-confirm` Run_Log row. W5 then reminds like for any Booked appointment (C13) |
+| **Booked** | the slot is **already taken** (a Cal.com booking, another confirmed row; capacity = `booking_capacity`) | **refuses**: nothing is sent, the row goes back to **Requested**, Run_Log (`failed`) says "double booking prevented: ... is already taken by ...". The check is made at confirmation time, so a booking that arrived after the patient asked is caught too (C8). Two requests confirmed together: the **lowest row id** keeps the slot (C7) |
+| **Declined** | | tells the patient (free text). Outside the 24 h window no template exists, W12 refuses and Run_Log says so: tell the patient by phone (C5). One attempt, never repeated |
+
+Guards before every message (C9): `Confirm_Sent` (once), `Opted_Out` (never), quiet hours 21:00–08:00 IST (the message waits, nothing is claimed, it goes at 08:00), `TEST_MODE` (to `TEST_PHONE`). A paused conversation does not stop a confirmation of the patient's own request.
+Failures (C11): if the claim write fails nothing is sent; if Meta refuses or is unreachable the Run_Log row says `failed` and the flag stays set (no retry storm); if a refusal cannot be written back, Run_Log says so and asks staff to fix the Status by hand.
+
+Tests: `node n8n/snippets/request-confirm.test.js` (rules), `node n8n/integrated/request-confirm.test.js` (C1–C13 end to end, incl. the whole life of a request: ask → request → confirm → one reminder), `node n8n/integrated/request-confirm-mutations.test.js` (15 breaks).
+
+**Not covered / known limits.** Two runs of this section overlapping (the schedule is every 2 minutes; a run takes seconds) could in theory both read a row before the claim: the same limit as W7/W8. A patient who is also reachable only by phone is not told about a decline outside the 24 h window (the Run_Log row is the signal).
