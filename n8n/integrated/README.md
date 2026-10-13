@@ -283,3 +283,13 @@ Every POST to the WhatsApp webhook must carry a valid `X-Hub-Signature-256` (HMA
 | `apply-w2-signature.js` | `node n8n/integrated/apply-w2-signature.js --in <export> [--out <file>] [--mode enforce\|log\|off] [--app-secret <secret>] [--keep-private]`. One existing node changed (Raw Body), four added |
 | `w2-signature.test.js`, `w2-signature-mutations.test.js` | 9 end-to-end checks (S1–S9) and 12 deliberate breaks |
 | `../snippets/meta-signature.js` (+ test) | The pure verification, pasted into `W2 – Verify Signature` (with `hmac-sha256.js`) |
+
+## 16. Urgent alerts at night, and alerts that fail (safety)
+
+An emergency at 23:00 used to wait for the 08:05 run because the owner alert obeyed the patients' quiet hours. Now the owner is alerted at once (the patient is still not messaged at night) and a staff alert that was due and did not go out is a `failed` Run_Log row. Details, the control run that shows the old behaviour, and the decisions left to the clinic: **`URGENT-ALERTS.md`**.
+
+| File | What it is |
+|---|---|
+| `apply-urgent-alerts.js` | `node n8n/integrated/apply-urgent-alerts.js --in <export> [--out <file>] [--keep-private]`. Three existing nodes, code only (W13 – Plan Ready, W13 – Record Sends, W12 – Prepare request) |
+| `urgent-alerts.test.js`, `urgent-alerts-mutations.test.js` | 9 end-to-end checks (U1–U9, quiet-hours switch OFF) and 9 deliberate breaks |
+| `../snippets/urgent-alerts.js` (+ test) | The pure rules pasted into the two W13 nodes |
