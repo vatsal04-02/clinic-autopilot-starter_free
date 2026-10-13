@@ -273,3 +273,13 @@ W13 can ask a local Ollama instead of OpenRouter: no key, no cost, no paid API. 
 | `apply-request-confirm.js` | `node n8n/integrated/apply-request-confirm.js --in <export> [--out <file>] [--keep-private]`. Adds the 25 `REQ –` nodes (every 2 minutes): staff-decided requests -> the patient is told through W12, a confirmation over a taken slot is refused. Changes no existing node |
 | `request-confirm.test.js`, `request-confirm-mutations.test.js` | 13 end-to-end checks (C1–C13) and 15 deliberate breaks |
 | `../snippets/request-confirm.js` (+ test), `../req/sections.js`, `../req/code/` | The rules (tested pure functions), the node builder and the node sources |
+
+## 15. W2 verifies Meta's signature (security)
+
+Every POST to the WhatsApp webhook must carry a valid `X-Hub-Signature-256` (HMAC-SHA256 of the **raw** body with your App Secret), else 401 and nothing is read or written. On by default (`enforce`), also in the demo. How to apply, the log-first roll-out, the one live check no offline test can replace, and exactly what is and is not verified: **`W2-SIGNATURE.md`**.
+
+| File | What it is |
+|---|---|
+| `apply-w2-signature.js` | `node n8n/integrated/apply-w2-signature.js --in <export> [--out <file>] [--mode enforce\|log\|off] [--app-secret <secret>] [--keep-private]`. One existing node changed (Raw Body), four added |
+| `w2-signature.test.js`, `w2-signature-mutations.test.js` | 9 end-to-end checks (S1–S9) and 12 deliberate breaks |
+| `../snippets/meta-signature.js` (+ test) | The pure verification, pasted into `W2 – Verify Signature` (with `hmac-sha256.js`) |

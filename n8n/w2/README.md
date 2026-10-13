@@ -145,7 +145,7 @@ curl -i -X POST "https://<your-n8n-host>/webhook-test/whatsapp-inbound" -H "Cont
 
 ## 10. Limitations (not done on purpose, or not possible here)
 
-- **POST signatures are not verified.** Meta signs every POST (`X-Hub-Signature-256`, with your App Secret). W2 does not check it, so anyone who knows the URL and a valid `phone_number_id` could post a fake message. This is the first thing to add before real use; it needs the App Secret and the raw request body, which I could not test without a real n8n.
+- **POST signatures are not verified in this standalone W2.** (The integrated master can verify them: `n8n/integrated/apply-w2-signature.js`, see `n8n/integrated/W2-SIGNATURE.md`.) Meta signs every POST (`X-Hub-Signature-256`, with your App Secret). W2 does not check it, so anyone who knows the URL and a valid `phone_number_id` could post a fake message. This is the first thing to add before real use; it needs the App Secret and the raw request body, which I could not test without a real n8n.
 - **A Grist outage loses that message.** Because Meta is answered first, Meta does not retry. The failure is written to Run_Log when Grist is reachable, but the message text is not kept.
 - **No opt-out handling.** A patient replying STOP is stored as a message; W2 does not set `Opted_Out`.
 - **Races leave a spare row.** Parallel messages from one new patient can create an extra lead/conversation row; every run uses the lowest id and names the spare, but staff must delete it. Two parallel runs for *different* new patients can still pick the same `Lead_id` (same limit as W1).

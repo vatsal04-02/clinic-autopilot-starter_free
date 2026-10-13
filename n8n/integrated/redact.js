@@ -3,6 +3,7 @@
 const PH_SECRET = 'PASTE_CAL_WEBHOOK_SECRET_AFTER_IMPORT';
 const PH_PHONE = 'PASTE_YOUR_TEST_NUMBER';
 const PH_VERIFY = 'PASTE_META_WEBHOOK_VERIFY_TOKEN';
+const PH_APP_SECRET = 'REPLACE_WITH_META_APP_SECRET';
 const assignment = (node, key) => (((node || {}).parameters || {}).assignments || { assignments: [] }).assignments.find((a) => a.name === key);
 function redact(wf, report = []) {
   const nodes = Object.fromEntries(wf.nodes.map((n) => [n.name, n]));
@@ -12,6 +13,8 @@ function redact(wf, report = []) {
   if (secret && secret.value !== PH_SECRET) { secret.value = PH_SECRET; report.push('W4 – Config > cal_webhook_secret'); }
   const verify = assignment(cn['W2 – Verify Config'], 'meta_verify_token');
   if (verify && verify.value !== PH_VERIFY) { verify.value = PH_VERIFY; report.push('W2 – Verify Config > meta_verify_token'); }
+  const appSecret = assignment(cn['W2 – Signature Config'], 'meta_app_secret');
+  if (appSecret && appSecret.value !== PH_APP_SECRET) { appSecret.value = PH_APP_SECRET; report.push('W2 – Signature Config > meta_app_secret'); }
   const allow = assignment(nodes['W12 – Config'], 'w12_allowlist');
   const phones = String(allow ? allow.value : '').split(/[,;]+/).map((x) => x.replace(/\D/g, '')).filter((x) => x.length >= 10);
   let text = JSON.stringify(copy);
@@ -23,4 +26,4 @@ function redact(wf, report = []) {
   }
   return JSON.parse(text);
 }
-module.exports = { redact, PH_SECRET, PH_PHONE, PH_VERIFY };
+module.exports = { redact, PH_SECRET, PH_PHONE, PH_VERIFY, PH_APP_SECRET };
