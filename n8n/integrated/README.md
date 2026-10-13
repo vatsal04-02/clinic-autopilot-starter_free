@@ -259,3 +259,14 @@ W13 can ask a local Ollama instead of OpenRouter: no key, no cost, no paid API. 
 | `ollama-provider-mutations.test.js` | 16 deliberate breaks of those rules; each must make the end-to-end test fail |
 | `../snippets/ai-ollama.js`, `ai-faq-fallback.js` (+ tests) | The pure functions pasted into the nodes |
 | `../tests/ollama-smoke.js` | OPTIONAL smoke test against a real local Ollama (skips when none is running). Not part of `run-all.js` |
+
+## 14. Request mode: appointment requests that staff confirm (demo / safe)
+
+`Settings > booking_mode = request` (per clinic, off by default) makes the AI write `Appointments.Status = Requested` instead of a booking; staff set Booked / Declined. Requests hold their slot, trigger no reminders and are never reported as confirmed. Rules, Grist migration, settings and tests: **`REQUEST-MODE.md`**.
+
+| File | What it is |
+|---|---|
+| `apply-request-mode.js` | `node n8n/integrated/apply-request-mode.js --in <export> [--out <file>] [--keep-private]`. Fingerprint-checked. Changes `W13 – Appointments` (filter), `W13 – Build Context`, `W13 – Plan` and one line of `W9 – Metrics`; no wiring, no credential |
+| `request-mode.test.js` | 16 end-to-end checks (R1–R16) incl. W5 reminders, W6–W9 equivalence, races, duplicates, claims |
+| `request-mode-mutations.test.js` | 15 deliberate breaks; each must make the end-to-end test fail |
+| `../snippets/ai-request-mode.js` (+ test) | The pure functions pasted into the two W13 nodes |

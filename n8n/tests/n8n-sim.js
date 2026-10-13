@@ -13,7 +13,7 @@
 // done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
   Leads: ['Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes', 'Lead_Stage'],
-  Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent', 'Outcome_Sent'],
+  Appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent', 'Outcome_Sent', 'Requested_At', 'Confirm_Sent'],
   Run_Log: ['Workflow', 'Record', 'Outcome', 'Error', 'At'],
   Clinics: ['Clinic_Slug', 'Clinic_Name', 'Grist_Doc_ID', 'WA_Phone_Number_ID', 'Active', 'Call_Number'],
   Settings: ['Key', 'Value'],
@@ -25,7 +25,7 @@ const CHOICES = {
   'Leads.Source': ['Website', 'WhatsApp', 'Instagram', 'Call', 'Walk-in', 'Referral'],
   'Leads.Status': ['New', 'Contacted', 'Booked', 'Converted', 'Lost'],
   'Leads.Lost_Reason': ['No response', 'Price', 'Distance', 'Went elsewhere', 'Not a fit', 'Other'],
-  'Appointments.Status': ['Booked', 'Rescheduled', 'Cancelled', 'Completed', 'No-show'],
+  'Appointments.Status': ['Booked', 'Rescheduled', 'Cancelled', 'Completed', 'No-show', 'Requested', 'Declined'],
   'Run_Log.Outcome': ['ok', 'skipped', 'failed'],
   'Messages.Direction': ['In', 'Out'],
   'Messages.Status': ['queued', 'needs_template', 'sent', 'delivered', 'read', 'failed'],
@@ -33,7 +33,7 @@ const CHOICES = {
   'Leads.Lead_Stage': ['cold', 'warm', 'hot'],
   'Knowledge.Category': ['services', 'pricing', 'hours', 'location', 'policy', 'faq', 'general'],
 };
-const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Appointments.Outcome_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
+const DATETIME = new Set(['Leads.Created_At', 'Leads.Next_Action_At', 'Leads.First_Response_At', 'Appointments.Start', 'Appointments.End', 'Appointments.R24_Sent', 'Appointments.R2_Sent', 'Appointments.Rebook_Sent', 'Appointments.Review_Sent', 'Appointments.Outcome_Sent', 'Appointments.Requested_At', 'Appointments.Confirm_Sent', 'Run_Log.At', 'Conversations.Last_Inbound_At', 'Messages.Created_At']);
 const TOGGLE = new Set(['Leads.Opted_Out', 'Leads.Escalated', 'Leads.Followup_Sent', 'Clinics.Active', 'Conversations.Automation_Paused', 'Messages.Send',
   'Conversations.Needs_Human', 'Messages.Needs_Human', 'Knowledge.Active']);
 

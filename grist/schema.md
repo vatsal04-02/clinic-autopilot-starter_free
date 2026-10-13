@@ -41,13 +41,17 @@ n8n and every workflow depend on them. Change a name here first, then in the tem
 | Physio | Text | |
 | Start | DateTime | |
 | End | DateTime | |
-| Status | Choice | Booked, Rescheduled, Cancelled, Completed, No-show |
+| Status | Choice | Booked, Rescheduled, Cancelled, Completed, No-show, **Requested**, **Declined** (the last two: request mode, see below) |
 | Fee_INR | Numeric | hidden from front desk by access rule |
 | R24_Sent, R2_Sent, Rebook_Sent, Review_Sent | DateTime | set by n8n (Review_Sent: W8, the review request) |
 | Outcome_Sent | DateTime | set by W7 (outcome check-in). **Added for W7: create it by hand** (DateTime, Asia/Kolkata). Without it W7 sends nothing (its claim write fails, W11 alerts) |
+| Requested_At | DateTime | **Request mode** (W13): when the AI recorded the request. Create by hand (Asia/Kolkata). A `Requested` row holds its slot for `request_hold_hours`; without this column the request write fails and W13 hands off |
+| Confirm_Sent | DateTime | **Request mode**: set by n8n when the patient was told a request was confirmed / declined |
 | Week | Formula | `$Start.date() - datetime.timedelta(days=$Start.weekday())` |
 | Showed | Formula | `$Status == "Completed"` |
 | No_Show | Formula | `$Status == "No-show"` |
+
+**Request mode** (`Settings > booking_mode = request`, see `n8n/integrated/REQUEST-MODE.md`): the AI never books. It writes a row with `Status = Requested`, `Booking_UID = req-<wamid>` and `Requested_At`, and tells the patient it is NOT confirmed. Staff set the Status to **Booked** (confirm) or **Declined**. `Requested` / `Declined` rows are read by nothing that counts, reminds or reports: W5, W6, W7, W8, W9 only read `Booked`, `Completed`, `No-show`, `Cancelled`, `Rescheduled`. A `Requested` row holds its slot against other patients for `request_hold_hours` (default 24).
 
 Staff set Status to **Completed** or **No-show** after each visit (Cal.com only knows Booked / Cancelled / Rescheduled): W6 (no-show
 rebook), W7 (check-in), W8 (review request) and W9 (report) read it. W9's report lists past visits still marked Booked.
@@ -107,7 +111,7 @@ Example rows: `n8n/w13/knowledge-base.sample.csv` (fake demo data: replace with 
 ### Settings
 Key (Text), Value (Text). Rows: clinic_name, open_time, close_time, working_days, owner_phone,
 staff_alert_phones, booking_link, review_link, services, TEST_MODE, TEST_PHONE,
-ai_mode, booking_mode, slot_minutes, booking_capacity, booking_notice_minutes, handoff_reply (W13, all optional),
+ai_mode, booking_mode, request_hold_hours, max_pending_requests, slot_minutes, booking_capacity, booking_notice_minutes, handoff_reply (W13, all optional),
 outcome_checkin, review_requests, weekly_report_whatsapp (W7, W8, W9; optional, missing = off),
 missed_call_enabled, demo_mode (MISSED_CALL_CAPTURE; optional, missing = off)
 
@@ -118,7 +122,7 @@ How the workflows read the values:
 - `TEST_MODE`: `true` or `false`. A missing row, or anything else, counts as ON (patient messages go to `TEST_PHONE`).
 - `booking_link`: the full link patients use to book (e.g. the clinic's Cal.com page); W6 adds it to follow-up messages, W13 to replies (https only).
 - `ai_mode` (W13): `off` (default, also when missing), `draft` (the AI decides and writes the CRM; the reply waits in Messages > AI_Reply for staff), `auto` (the reply is sent through W12).
-- `booking_mode` (W13): `link` (default: the patient confirms on the booking link, Cal.com → W4 writes Appointments) or `direct` (W13 writes the Booked row itself).
+- `booking_mode` (W13): `link` (default: the patient confirms on the booking link, Cal.com → W4 writes Appointments), `direct` (W13 writes the Booked row itself) or `request` (W13 writes a `Requested` row that staff confirm; `request_hold_hours` default 24, `max_pending_requests` default 2).
 - `slot_minutes` (30), `booking_capacity` (1 patient per slot), `booking_notice_minutes` (120): how W13 works out free times from open_time / close_time / working_days and the Booked appointments. No hours = W13 never offers a time.
 - `outcome_checkin` (W7), `review_requests` (W8), `weekly_report_whatsapp` (W9 owner copy): `on` to switch on for this clinic,
   missing or anything else = off. Switch each on only after its template (`outcome_check`, `review_request`,
