@@ -8,6 +8,7 @@
 // errors do not reach the caller, and the node passes its input items on. Unknown workflow id = error (n8n: workflow not found).
 // Claude: https://api.anthropic.com/ must use the "Anthropic API" credential and nothing else may; opts.anthropic fakes it.
 // OpenRouter (W13 demo): https://openrouter.ai/ must use the "OpenRouter API" credential and nothing else may; opts.openrouter fakes it.
+// Ollama (local AI, no key): an HTTP node with authentication "none" may call <host>/api/chat and nothing else; opts.ollama(method, url, body, { timeout_ms }) fakes it.
 // Also: Respond to Webhook (recorded in result.responses, items pass through), Loop Over Items (splitInBatches v3: output 0 =
 // done, output 1 = loop; per-run state), and HTTP "continue (using error output)" = a second output with the error items.
 const COLUMNS = {
@@ -188,8 +189,11 @@ function simulate(wf, opts) {
           break;
         }
         case 'n8n-nodes-base.httpRequest': {
-          if (!node.credentials || !node.credentials.httpHeaderAuth) throw new Error(`HTTP ${name}: no credential`);
-          const credName = node.credentials.httpHeaderAuth.name;
+          // Ollama (local AI) needs no key: ONLY a node with authentication "none" may run without a credential, and only against /api/chat
+          // (opts.ollama fakes it). Anything else without a credential still fails, so a forgotten credential is caught.
+          const noAuth = !node.credentials && (node.parameters || {}).authentication === 'none';
+          if (!noAuth && (!node.credentials || !node.credentials.httpHeaderAuth)) throw new Error(`HTTP ${name}: no credential`);
+          const credName = noAuth ? '' : node.credentials.httpHeaderAuth.name;
           const resp = ((p.options || {}).response || {}).response || {};
           const continueOnFail = node.onError === 'continueRegularOutput';
           const errorOutput = node.onError === 'continueErrorOutput';   // second output carries the failed items
@@ -203,6 +207,14 @@ function simulate(wf, opts) {
               if (p.sendQuery) for (const q of p.queryParameters.parameters) query[q.name] = resolve(q.value, ctx);
               let body;
               if (p.sendBody) { body = resolve(p.jsonBody, ctx); if (typeof body === 'string') body = JSON.parse(body); }
+              if (noAuth) {
+                if (!/^https?:\/\/[^/]+\/api\/chat$/.test(String(url))) throw new Error(`HTTP ${name}: no credential for ${url} (only the Ollama chat API is allowed without one)`);
+                if (!opts.ollama) throw new Error('sim: no fake Ollama (opts.ollama)');
+                const timeout = (p.options || {}).timeout === undefined ? undefined : Number(resolve(p.options.timeout, ctx));
+                const r = opts.ollama(method, url, body, { timeout_ms: timeout });   // { status, body } or throws (timeout / refused)
+                if (r.status >= 400 && !resp.neverError) throw new Error(`Request failed with status code ${r.status}`);
+                return { json: r.body };
+              }
               if (/^https:\/\/graph\.facebook\.com\//.test(String(url))) {
                 if (credName !== 'WhatsApp Cloud API') throw new Error(`HTTP ${name}: Meta called with credential "${credName}"`);
                 if (!opts.meta) throw new Error('sim: no fake Meta (opts.meta)');

@@ -162,4 +162,40 @@ function fakeOpenRouter(claude) {
   return fn;
 }
 
-module.exports = { NOW, sec, at, DAY, SETTINGS, settingsRows, KNOWLEDGE, ASHA, leadRows, appointmentRows, conversationRows, messageRows, BASE_DECISION, fakeDecide, fakeClaude, claudeResponse, fakeOpenRouter };
+// ---------------------------------------------------------------- the same fake behind OLLAMA (local AI, native /api/chat)
+// The Ollama request is turned back into the Anthropic shape the fake reads (its one system message split at the CLINIC and NOW sections),
+// and the fake's answers (normal, refusal, cut off, HTTP errors, thrown timeouts / refused connections) become Ollama chat answers.
+// `fn.calls` = every request Ollama received: { method, url, body, timeout_ms }.
+function toOllamaBody(status, b, model) {
+  if (!b || typeof b !== 'object') return b;
+  if (status >= 400 || b.type === 'error') return { error: (b.error && (b.error.message || b.error.type)) || 'error' };
+  const text = (b.content || []).filter((c) => c && c.type === 'text').map((c) => c.text).join('');
+  const refused = b.stop_reason === 'refusal';
+  return {
+    model, created_at: '2026-10-06T05:30:00Z', message: { role: 'assistant', content: refused ? '' : text }, done: true,
+    done_reason: b.stop_reason === 'max_tokens' ? 'length' : 'stop',
+    prompt_eval_count: (b.usage && b.usage.input_tokens) || 0, eval_count: (b.usage && b.usage.output_tokens) || 0,
+  };
+}
+function fakeOllama(claude) {
+  const calls = [];
+  const fn = (method, url, body, extra) => {
+    calls.push({ method, url, body, ...(extra || {}) });
+    const sys = body.messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+    const i = sys.indexOf('\n\nCLINIC\n');
+    const j = sys.indexOf('\n\nNOW: ');
+    const system = i > 0 && j > i ? [sys.slice(0, i), sys.slice(i + 2, j), sys.slice(j + 2)].map((text) => ({ type: 'text', text })) : [{ type: 'text', text: sys }];
+    const req = {
+      model: body.model, max_tokens: body.options && body.options.num_predict, system,
+      messages: body.messages.filter((m) => m.role !== 'system').map((m) => ({ role: m.role, content: m.content })),
+      output_config: body.format ? { format: { type: 'json_schema', schema: body.format } } : undefined,
+    };
+    const r = claude(method, url, {}, req);   // may throw (timeout / refused): the HTTP node then fails like a real one
+    return { status: r.status, body: toOllamaBody(r.status, r.body, body.model) };
+  };
+  fn.calls = calls;
+  fn.claude = claude;
+  return fn;
+}
+
+module.exports = { NOW, sec, at, DAY, SETTINGS, settingsRows, KNOWLEDGE, ASHA, leadRows, appointmentRows, conversationRows, messageRows, BASE_DECISION, fakeDecide, fakeClaude, claudeResponse, fakeOpenRouter, fakeOllama };

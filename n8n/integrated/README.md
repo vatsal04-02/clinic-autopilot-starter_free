@@ -247,3 +247,15 @@ A webhook, `POST /webhook/missed-call`, turns a missed call into a lead, an Inbo
 | `missed-call-capture-mutations.test.js` | 20 deliberate breaks of those rules; each must make the end-to-end test fail. |
 | `../snippets/call-events.js`, `wa-simulate.js` (+ tests) | The pure functions pasted into the nodes. `wa-send.js` itself is unchanged. |
 | `../mcc/sections.js`, `../mcc/code/` | The node builder and the Code-node sources. |
+
+## 13. Ollama (local AI) + the FAQ fallback (demo / local)
+
+W13 can ask a local Ollama instead of OpenRouter: no key, no cost, no paid API. A clear routine question is still answered from the knowledge base when the model is down. Full description, settings, safe defaults and what is (not) verified: **`OLLAMA-PROVIDER.md`**.
+
+| File | What it is |
+|---|---|
+| `apply-ollama-provider.js` | `node n8n/integrated/apply-ollama-provider.js --in <export> [--out <file>] [--demo] [--keep-private]`. Fingerprint-checked. Adds 6 W13 nodes, 7 `W13 – Config` values, the FAQ block in `W13 – Plan`; OpenRouter is untouched. `--demo`: `model_provider = ollama`, `faq_fallback = on` |
+| `ollama-provider.test.js` | 14 end-to-end checks (O1–O13) on the patched workflow: request, settings, provider switch, good / bad answers, 10 failure shapes, FAQ fallback, emergency, gates, draft mode, quiet hours |
+| `ollama-provider-mutations.test.js` | 16 deliberate breaks of those rules; each must make the end-to-end test fail |
+| `../snippets/ai-ollama.js`, `ai-faq-fallback.js` (+ tests) | The pure functions pasted into the nodes |
+| `../tests/ollama-smoke.js` | OPTIONAL smoke test against a real local Ollama (skips when none is running). Not part of `run-all.js` |
