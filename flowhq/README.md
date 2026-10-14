@@ -248,7 +248,7 @@ The image is `flowhq/Dockerfile`, built from the repository root so it includes 
 | Suite | Command | Result |
 |---|---|---|
 | Typecheck (strict, web + server + tests) | `npm run typecheck` | clean |
-| Unit + adapter + API + requests | `npm test` | **103 / 103 passed** (5 files) |
+| Unit + adapter + API + requests | `npm test` | **104 / 104 passed** (5 files) |
 | End-to-end, real browser, demo data | `npm run build && npm run test:e2e` | **22 / 22 steps passed**, screenshots in `tests/e2e/screenshots` |
 | Production build | `npm run build` | web + server bundle OK |
 | Production layout smoke | prod deps only + snippets copy | starts; refuses to start without backend settings |

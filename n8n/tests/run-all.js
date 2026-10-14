@@ -20,6 +20,8 @@ const files = [
   path.join(root, 'integrated', 'validate-w13-prompt.js'),
   path.join(root, 'integrated', 'validate-missed-call-capture.js'),
   ...fs.readdirSync(path.join(root, 'integrated')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'integrated', f)),
+  path.join(root, 'demo', 'validate-demo-workflow.js'),
+  ...fs.readdirSync(path.join(root, 'demo')).filter((f) => f.endsWith('.test.js')).sort().map((f) => path.join(root, 'demo', f)),
 ];
 
 for (const file of files) {

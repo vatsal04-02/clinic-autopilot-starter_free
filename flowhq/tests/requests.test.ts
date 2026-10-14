@@ -48,6 +48,7 @@ function docFor(opts: { settings?: Record<string, string>; control?: boolean } =
         rec(2, { Conversation: 1, Direction: 'Out', Body: '[DEMO simulated, not sent] Namaste! Sorry, we missed your call to Demo Physio. Reply here and we will help.', Template: 'missed_call_ack', Sent_By: 'W12-missed-call-ack [DEMO simulated: nothing was sent; would go to +919000000999]', WA_Message_ID: 'sim-1', Status: 'queued', Send: false, Created_At: T(-3) + 5 }),
         rec(3, { Conversation: 2, Direction: 'In', Body: 'Can I come on Thursday at 4?', Sent_By: 'Patient', WA_Message_ID: 'wamid.demo.1', Status: 'Received', Intent: 'booking', AI_Action: 'book_slot', AI_Confidence: 0.9, AI_Status: 'replied', Created_At: T(-1) }),
         rec(4, { Conversation: 2, Direction: 'Out', Body: 'We have noted your request. It is NOT confirmed yet.', Sent_By: 'W13-ai-receptionist', WA_Message_ID: 'wamid.demo.out.1', Status: 'sent', Created_At: T(-1) + 10 }),
+        rec(5, { Conversation: 2, Direction: 'Out', Body: 'Hello, this is the front desk.', Sent_By: 'Reception', WA_Message_ID: '', Status: 'queued', Send: false, AI_Reason: 'DEMO simulated, nothing was sent', Created_At: T(-0.5) }),
       ],
       Run_Log: [rec(1, { Workflow: 'MCC-missed-call-capture', Record: '[DEMO] call-demo-0001 L-1: ack simulated; staff alert simulated', Outcome: 'ok', At: T(-3) })],
       Knowledge: [rec(1, { Title: 'Hours', Category: 'hours', Content: 'Open 9 to 7.', Active: true })],
@@ -224,6 +225,13 @@ describe('missed calls and simulated messages', () => {
     expect(ack.author).toMatchObject({ kind: 'automation', automationKey: 'missed_call_capture' });
     expect(ack.body.startsWith('[DEMO simulated')).toBe(false);                              // the badge says it; the text stays clean
     expect(JSON.stringify(r)).not.toMatch(/would go to|\+919000000999/);                     // the number a demo message "would" go to stays server-side
+  });
+  it('a team reply that went through the simulated gateway is "simulated" too (W10 marks the row), not queued or sent', async () => {
+    const r = (await (await setup().ws()).conversation('2', admin))!;
+    const staffRow = r.messages.find((m) => m.body === 'Hello, this is the front desk.')!;
+    expect(staffRow).toMatchObject({ status: 'simulated', statusNote: 'Demo: nothing was sent' });
+    expect(staffRow.author).toMatchObject({ kind: 'staff', name: 'Reception' });
+    expect(r.messages.find((m) => m.body.startsWith('We have noted'))!.status).toBe('sent');   // a real, accepted message stays "sent"
   });
   it('activity: the call, the intended acknowledgement (as such), the request and its outcomes; nothing simulated is listed as sent or as an AI reply', async () => {
     const a = await (await setup().ws()).activity({ limit: 100 }, admin);

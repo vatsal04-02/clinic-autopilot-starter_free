@@ -148,6 +148,7 @@ export function toConversation(c: GristRecord, lead: GristRecord | null, last: G
 // The phone number a DEMO message "would go to" is in Sent_By; it is never copied into the author.
 export const DEMO_SIM = /\[DEMO simulated/;
 export const DEMO_SIM_PREFIX = /^\[DEMO simulated, not sent\]\s*/;
+export const DEMO_SIM_REASON = /^DEMO simulated/;   // a team reply W10 ran through the simulated gateway: Messages.AI_Reason says so
 export function authorOf(m: GristRecord, contactName: string): Message['author'] {
   const f = m.fields;
   const by = txt(f.Sent_By) || '';
@@ -171,7 +172,7 @@ export const universal = (s: string | null) => (s ? s.replace(/\bpatient's\b/gi,
 export function statusOf(m: GristRecord): { status: MessageStatus; note: string | null } {
   const f = m.fields;
   if (f.Direction === 'In') return { status: 'received', note: null };
-  if (DEMO_SIM.test(String(f.Sent_By ?? '')) || DEMO_SIM_PREFIX.test(String(f.Body ?? ''))) return { status: 'simulated', note: 'Demo: nothing was sent' };
+  if (DEMO_SIM.test(String(f.Sent_By ?? '')) || DEMO_SIM_PREFIX.test(String(f.Body ?? '')) || DEMO_SIM_REASON.test(String(f.AI_Reason ?? ''))) return { status: 'simulated', note: 'Demo: nothing was sent' };
   const s = String(f.Status ?? '');
   const wa = txt(f.WA_Message_ID);
   const reason = universal(txt(f.AI_Reason));

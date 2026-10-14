@@ -1,0 +1,95 @@
+# FlowHQ Clinic Autopilot - LOCAL DEMO stack (n8n + Grist + optional Ollama + optional FLOW HQ). Nothing here is published to the internet:
+# every port is bound to 127.0.0.1, there is no Caddy / tunnel / domain, and the n8n editor and webhooks are reachable from THIS machine only.
+#
+#   cp .env.demo.example .env.demo && ./scripts/gen-demo-secrets.sh .env.demo        (then pin N8N_VERSION and GRIST_VERSION in .env.demo)
+#   docker compose -f docker-compose.demo.yml --env-file .env.demo up -d                          n8n  http://127.0.0.1:5678   Grist http://127.0.0.1:8484
+#   docker compose -f docker-compose.demo.yml --env-file .env.demo --profile ollama up -d          + local AI  (or install Ollama on the host instead)
+#   docker compose -f docker-compose.demo.yml --env-file .env.demo --profile flowhq up -d --build  + FLOW HQ  http://127.0.0.1:8787   (needs DEMO_REGISTRY_DOC_ID, DEMO_GRIST_API_KEY)
+#   docker compose -f docker-compose.demo.yml --env-file .env.demo down -v                         throws EVERYTHING away (workflows, Grist docs, models)
+# Step by step, what to click and what to expect: n8n/demo/DEMO.md.  Do not expose these ports (no reverse proxy, no tunnel, no port forwarding).
+# NOT a production stack: Grist runs unsandboxed here (demo data only), n8n uses http, nothing is backed up. Production: docker-compose.yml.
+
+name: flowhq-demo
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:${N8N_VERSION:?set N8N_VERSION in .env.demo (pin an exact version)}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5678:5678"          # the editor AND the webhooks: this machine only
+    environment:
+      - N8N_HOST=127.0.0.1
+      - N8N_PROTOCOL=http
+      - N8N_PORT=5678
+      - N8N_SECURE_COOKIE=false         # plain http on localhost
+      - WEBHOOK_URL=http://127.0.0.1:5678/
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY:?run scripts/gen-demo-secrets.sh .env.demo}
+      - GENERIC_TIMEZONE=Asia/Kolkata
+      - TZ=Asia/Kolkata
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_VERSION_NOTIFICATIONS_ENABLED=false
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=72
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets n8n reach an Ollama installed on the host (W13 – Config > ollama_base_url)
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+  grist:
+    image: gristlabs/grist:${GRIST_VERSION:?set GRIST_VERSION in .env.demo (pin an exact version)}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8484:8484"
+    environment:
+      - APP_HOME_URL=http://127.0.0.1:8484
+      - GRIST_SESSION_SECRET=${GRIST_SESSION_SECRET:?run scripts/gen-demo-secrets.sh .env.demo}
+      - GRIST_DEFAULT_EMAIL=demo@example.com
+      - GRIST_SANDBOX_FLAVOR=${GRIST_SANDBOX_FLAVOR:-unsandboxed}   # demo data only; a server uses gvisor
+    volumes:
+      - grist_data:/persist
+
+  ollama:
+    profiles: ["ollama"]
+    image: ollama/ollama:${OLLAMA_VERSION:-latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    # After the first start:  docker compose -f docker-compose.demo.yml --env-file .env.demo exec ollama ollama pull qwen2.5:7b-instruct
+    # and set W13 – Config > ollama_base_url to http://ollama:11434 (the workflow default is http://host.docker.internal:11434 = Ollama on the host).
+
+  flowhq:
+    profiles: ["flowhq"]
+    build:
+      context: .
+      dockerfile: flowhq/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      - PORT=8787
+      - FLOWHQ_DEMO=false
+      - GRIST_BASE_URL=http://grist:8484
+      - GRIST_API_KEY=${DEMO_GRIST_API_KEY:?create a Grist API key and put it in .env.demo (DEMO_GRIST_API_KEY)}
+      - GRIST_REGISTRY_DOC_ID=${DEMO_REGISTRY_DOC_ID:?put the DEMO registry doc id in .env.demo (DEMO_REGISTRY_DOC_ID)}
+      - GRIST_LEADS_TABLE=LEADS
+      - FLOWHQ_SESSION_SECRET=${FLOWHQ_SESSION_SECRET:?run scripts/gen-demo-secrets.sh .env.demo}
+      - FLOWHQ_SECURE_COOKIES=false     # plain http on localhost
+      - FLOWHQ_DEFAULT_INDUSTRY=clinic
+      - FLOWHQ_TIMEZONE=Asia/Kolkata
+      - FLOWHQ_LOCALE=en-IN
+      - FLOWHQ_CURRENCY=INR
+      - FLOWHQ_USERS_FILE=/app/flowhq/users.json
+    volumes:
+      - flowhq_config:/app/flowhq/config                          # workspace profiles written by Settings
+      - ./flowhq/config/users.json:/app/flowhq/users.json:ro      # create it from users.example.json (flowhq/README.md H); never committed
+    depends_on:
+      - grist
+
+volumes:
+  n8n_data:
+  grist_data:
+  ollama_data:
+  flowhq_config:

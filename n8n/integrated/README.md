@@ -293,3 +293,9 @@ An emergency at 23:00 used to wait for the 08:05 run because the owner alert obe
 | `apply-urgent-alerts.js` | `node n8n/integrated/apply-urgent-alerts.js --in <export> [--out <file>] [--keep-private]`. Three existing nodes, code only (W13 – Plan Ready, W13 – Record Sends, W12 – Prepare request) |
 | `urgent-alerts.test.js`, `urgent-alerts-mutations.test.js` | 9 end-to-end checks (U1–U9, quiet-hours switch OFF) and 9 deliberate breaks |
 | `../snippets/urgent-alerts.js` (+ test) | The pure rules pasted into the two W13 nodes |
+
+## 17. The local demo: all layers in one workflow (demo / local)
+
+`node n8n/demo/build-demo-workflow.js` applies, in order, MISSED_CALL_CAPTURE (`--demo`), the Ollama provider (`--demo`), request mode, request confirmation, urgent alerts, the W2 signature check and `n8n/demo/apply-demo-profile.js` to the master, and replaces the production registry id by a placeholder. Result: `n8n/demo/clinic-autopilot-demo.json` (421 nodes, inactive, placeholders only). Proof against the master: `node n8n/demo/validate-demo-workflow.js` (11 groups). Guide, step-by-step script, environment variables, what is and is not verified: `n8n/demo/DEMO.md`.
+
+Implementation record: the missed-call section is **MISSED_CALL_CAPTURE** (node prefix `MCC –`, `POST /webhook/missed-call`, Run_Log `MCC-missed-call-capture`); it is deliberately not called W14 and **W14 / W15 stay unassigned**. W12 / W13 keep their shared-workflow architecture (every message is sent by a W12 run started with `$workflow.id`).
