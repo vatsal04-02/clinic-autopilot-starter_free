@@ -139,6 +139,7 @@ export function Shell({ children }: { children: ReactNode }) {
           </button>
           <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-2">
             {ws.demo && <Badge tone="blue" className="hidden sm:inline-flex">Demo data</Badge>}
+            {ws.backend.capabilities.demoMode && <span title="Demo workspace: messages are worked out and logged, nothing is sent to anyone"><Badge tone="amber">DEMO · nothing is sent</Badge></span>}
             <button onClick={toggle} className="rounded-lg p-2 text-fg-2 transition-colors hover:bg-surface hover:text-fg" aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
               {theme === 'dark' ? <Sun className="h-[18px] w-[18px]" /> : <Moon className="h-[18px] w-[18px]" />}
             </button>

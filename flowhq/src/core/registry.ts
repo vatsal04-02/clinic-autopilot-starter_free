@@ -46,6 +46,8 @@ export const AUTOMATIONS: Record<AutomationKey, AutomationDef> = {
   staff_reply: { key: 'staff_reply', module: 'inbox', category: 'engage', order: 10 },
   weekly_reports: { key: 'weekly_reports', module: 'reports', category: 'insight', order: 11 },
   error_alerts: { key: 'error_alerts', module: 'settings', category: 'system', order: 12 },
+  missed_call_capture: { key: 'missed_call_capture', module: 'contacts', category: 'capture', order: 13 },
+  request_confirmation: { key: 'request_confirmation', module: 'bookings', category: 'bookings', order: 14 },
 };
 export const automationName = (key: AutomationKey, t: Terminology) => fmt(t.automations[key]?.name || key, t);
 export const automationDescription = (key: AutomationKey, t: Terminology) => fmt(t.automations[key]?.description || '', t);
@@ -100,6 +102,11 @@ export const ACTIVITY: Record<ActivityKind, { label: string; tone: 'blue' | 'neu
   automation_failed: { label: 'Automation failed', tone: 'red', icon: 'alert-triangle' },
   automation_skipped: { label: 'Automation skipped', tone: 'neutral', icon: 'skip-forward' },
   message_sent: { label: 'Message sent', tone: 'neutral', icon: 'send' },
+  missed_call: { label: 'Missed call', tone: 'amber', icon: 'phone-missed' },
+  message_simulated: { label: 'Demo: message not sent', tone: 'neutral', icon: 'send' },
+  booking_requested: { label: '{booking.singular} requested', tone: 'amber', icon: 'calendar-plus' },
+  request_confirmed: { label: 'Request confirmed', tone: 'green', icon: 'calendar-check' },
+  request_declined: { label: 'Request declined', tone: 'neutral', icon: 'calendar-x' },
 };
 export const TASKS: Record<TaskKind, { label: string; action: string }> = {
   reply_needed: { label: 'Reply needed', action: 'Open conversation' },
@@ -107,6 +114,7 @@ export const TASKS: Record<TaskKind, { label: string; action: string }> = {
   booking_outcome: { label: 'Mark the outcome', action: 'Completed or no-show?' },
   reply_failed: { label: 'Reply not delivered', action: 'Open conversation' },
   first_response: { label: 'Waiting for a first reply', action: 'Open {contact.singular|lower}' },
+  booking_request: { label: '{booking.singular} request to confirm', action: 'Confirm or decline' },
 };
 
 // ---------------------------------------------------------------- resolving a workspace's profile

@@ -1,9 +1,11 @@
 // Bookings for every industry. The booking system stays the source of truth: this page shows what it says and lets the team
 // mark what only the team knows (completed / no-show). It never creates, moves or offers times.
+// REQUESTS (asked for in chat, Status Requested) are a separate list and are never shown as bookings: a person confirms or declines each one here,
+// and the Request Confirmation automation then tells the contact.
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarCheck2, CalendarDays, CalendarX2, Check, Info, Search, Sparkles } from 'lucide-react';
+import { CalendarCheck2, CalendarDays, CalendarX2, Check, CircleHelp, Info, Search, Sparkles } from 'lucide-react';
 import type { Booking, BookingStatus } from '@core/domain';
 import { api, ws as wsPath } from '../lib/api';
 import { useWs } from '../lib/workspace';
@@ -13,8 +15,8 @@ import { Page } from '../components/layout/Shell';
 import { Badge, Button, Card, Input, Segmented, type Tone } from '../components/ui/primitives';
 import { EmptyState, ErrorState, SkeletonRows, useToast } from '../components/ui/feedback';
 
-type View = 'upcoming' | 'needs_outcome' | 'past' | 'all';
-const STATUS_TONE: Record<BookingStatus, Tone> = { scheduled: 'blue', rescheduled: 'blue', cancelled: 'neutral', completed: 'green', no_show: 'amber' };
+type View = 'upcoming' | 'requests' | 'needs_outcome' | 'past' | 'all';
+const STATUS_TONE: Record<BookingStatus, Tone> = { scheduled: 'blue', rescheduled: 'blue', cancelled: 'neutral', completed: 'green', no_show: 'amber', requested: 'amber', declined: 'neutral', unknown: 'neutral' };
 
 export default function Bookings() {
   const { ws, t, tt } = useWs();
@@ -23,6 +25,8 @@ export default function Bookings() {
   const [q, setQ] = useState('');
   const list = useQuery({ queryKey: ['bookings', ws.id, view, q], queryFn: () => api<Booking[]>(wsPath(ws.id, `/bookings?view=${view}&q=${encodeURIComponent(q)}`)), refetchInterval: 30000 });
   const pending = useQuery({ queryKey: ['bookings', ws.id, 'needs_outcome', ''], queryFn: () => api<Booking[]>(wsPath(ws.id, '/bookings?view=needs_outcome')), refetchInterval: 60000 });
+  const requests = useQuery({ queryKey: ['bookings', ws.id, 'requests', ''], enabled: caps.bookingRequests, queryFn: () => api<Booking[]>(wsPath(ws.id, '/bookings?view=requests')), refetchInterval: 30000 });
+  const waiting = requests.data?.filter((b) => b.status === 'requested').length;
   const days = useMemo(() => {
     const out: Array<{ key: string; label: string; items: Booking[] }> = [];
     for (const b of list.data || []) {
@@ -35,6 +39,7 @@ export default function Bookings() {
   }, [list.data, ws]);
   const views: Array<{ value: View; label: string; count?: number }> = [
     { value: 'upcoming', label: 'Upcoming' },
+    ...(caps.bookingRequests ? [{ value: 'requests' as View, label: 'Requests', count: waiting }] : []),
     ...(caps.bookingStatusUpdate.length ? [{ value: 'needs_outcome' as View, label: 'Needs outcome', count: pending.data?.length }] : []),
     { value: 'past', label: 'Past' },
     { value: 'all', label: 'All' },
@@ -47,6 +52,12 @@ export default function Bookings() {
           <p>{tt(`${caps.bookingSourceOfTruth} is the source of truth for {booking.plural|lower}. Create, move or cancel them there; they appear here automatically. Free times are never offered from this screen.`)}</p>
         </div>
       )}
+      {view === 'requests' && (
+        <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber/30 bg-amber/[0.07] px-4 py-3 text-[13px] text-fg-2" role="note">
+          <CircleHelp className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
+          <p>{tt('A request is NOT a confirmed {booking.singular|lower}. The {contact.singular|lower} was told it is waiting for the team. Confirm or decline each one: the {contact.singular|lower} is then told automatically, and a time that is already taken cannot be confirmed.')}</p>
+        </div>
+      )}
       <div className="mb-4 flex flex-wrap items-center gap-2.5">
         <Segmented value={view} onChange={setView} options={views} />
         <div className="w-full max-w-xs"><Input icon={<Search className="h-4 w-4" />} placeholder={tt('Search {contact.singular|lower}, {service.singular|lower}, {staff.singular|lower}')} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search" /></div>
@@ -54,8 +65,8 @@ export default function Bookings() {
       <Card className="overflow-hidden">
         {list.isLoading ? <SkeletonRows rows={8} /> : list.error ? <ErrorState error={list.error} retry={() => list.refetch()} /> : !days.length ? (
           <EmptyState icon={view === 'needs_outcome' ? <CalendarCheck2 className="h-5 w-5" /> : <CalendarDays className="h-5 w-5" />}
-            title={view === 'needs_outcome' ? 'Every outcome is marked' : tt('No {booking.plural|lower} here')}
-            body={view === 'needs_outcome' ? tt('Past {booking.plural|lower} still waiting for completed or no-show appear here.') : q ? 'Try a different search.' : tt('New {booking.plural|lower} appear as soon as they are made.')} />
+            title={view === 'needs_outcome' ? 'Every outcome is marked' : view === 'requests' ? 'No requests waiting' : tt('No {booking.plural|lower} here')}
+            body={view === 'needs_outcome' ? tt('Past {booking.plural|lower} still waiting for completed or no-show appear here.') : view === 'requests' ? tt('When a {contact.singular|lower} asks for a time in chat, the request appears here for your team to confirm.') : q ? 'Try a different search.' : tt('New {booking.plural|lower} appear as soon as they are made.')} />
         ) : (
           <div className="divide-y divide-line">
             {days.map((d) => (
@@ -74,16 +85,18 @@ export default function Bookings() {
 }
 
 function BookingRow({ b }: { b: Booking }) {
-  const { ws, t, f, automation } = useWs();
+  const { ws, t, tt, f, automation } = useWs();
   const caps = ws.backend.capabilities;
   const qc = useQueryClient();
   const toast = useToast();
   const mark = useMutation({
     mutationFn: (status: BookingStatus) => api<Booking>(wsPath(ws.id, `/bookings/${b.id}`), { method: 'PATCH', body: { status } }),
-    onSuccess: (r) => { toast('ok', `Marked ${t(`bookingStatus.${r.status}`).toLowerCase()}`); qc.invalidateQueries({ queryKey: ['bookings', ws.id] }); qc.invalidateQueries({ queryKey: ['tasks', ws.id] }); qc.invalidateQueries({ queryKey: ['dashboard', ws.id] }); },
+    onSuccess: (r) => { toast('ok', r.source.kind === 'assistant' && b.status === 'requested' ? (r.status === 'declined' ? tt('Declined. The {contact.singular|lower} is told automatically.') : tt('Confirmed. The {contact.singular|lower} is told automatically within a few minutes.')) : `Marked ${t(`bookingStatus.${r.status}`).toLowerCase()}`); qc.invalidateQueries({ queryKey: ['bookings', ws.id] }); qc.invalidateQueries({ queryKey: ['tasks', ws.id] }); qc.invalidateQueries({ queryKey: ['dashboard', ws.id] }); },
     onError: (e: Error) => toast('bad', e.message),
   });
   const canMark = b.needsOutcome && caps.bookingStatusUpdate.length > 0;
+  const canDecide = b.status === 'requested' && caps.bookingRequests;
+  const awaitingNotice = b.announced === false && b.status !== 'requested';   // decided by the team, the contact has not been told yet
   return (
     <li className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 transition-colors hover:bg-surface-2/60', b.status === 'cancelled' && 'opacity-60')}>
       <div className="w-[92px] shrink-0">
@@ -95,8 +108,10 @@ function BookingRow({ b }: { b: Booking }) {
           {b.contactId ? <Link to={`/w/${ws.id}/contacts/${b.contactId}`} className="truncate text-[13.5px] font-medium text-fg hover:text-blue-soft">{b.contactName || t('contact.singular')}</Link> : <span className="truncate text-[13.5px] font-medium">{b.contactName || t('contact.singular')}</span>}
           <Badge tone={STATUS_TONE[b.status]}>{t(`bookingStatus.${b.status}`)}</Badge>
           {b.needsOutcome && <Badge tone="amber">Outcome not marked</Badge>}
+          {b.status === 'requested' && <Badge tone="amber">Not confirmed</Badge>}
+          {awaitingNotice && <Badge tone="neutral">{tt('{contact.singular} not told yet')}</Badge>}
         </div>
-        <p className="mt-0.5 truncate text-[12.5px] text-fg-2">{[b.title || b.service || t('booking.singular'), b.owner].filter(Boolean).join(' · ')}</p>
+        <p className="mt-0.5 truncate text-[12.5px] text-fg-2">{[b.title || b.service || t('booking.singular'), b.owner, b.requestedAt && b.status === 'requested' ? `asked ${dateTime(f, b.requestedAt)}` : null].filter(Boolean).join(' · ')}</p>
         {b.automationsDone.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             {b.automationsDone.map((a, i) => (
@@ -108,6 +123,12 @@ function BookingRow({ b }: { b: Booking }) {
       <div className="flex shrink-0 items-center gap-3">
         <span className={cn('inline-flex items-center gap-1 text-[11.5px]', b.source.kind === 'assistant' ? 'text-blue-soft' : 'text-muted')}>{b.source.kind === 'assistant' && <Sparkles className="h-3 w-3" />}{b.source.label}</span>
         {b.value !== null && <span className="num text-[13px] font-medium text-fg">{money(f, b.value)}</span>}
+        {canDecide && (
+          <div className="flex gap-1.5">
+            <Button size="sm" variant="subtle" icon={<CalendarCheck2 className="h-3.5 w-3.5" />} loading={mark.isPending && mark.variables === 'scheduled'} disabled={mark.isPending} onClick={() => mark.mutate('scheduled')}>Confirm</Button>
+            <Button size="sm" variant="ghost" icon={<CalendarX2 className="h-3.5 w-3.5" />} loading={mark.isPending && mark.variables === 'declined'} disabled={mark.isPending} onClick={() => mark.mutate('declined')}>Decline</Button>
+          </div>
+        )}
         {canMark && (
           <div className="flex gap-1.5">
             {caps.bookingStatusUpdate.includes('completed') && <Button size="sm" variant="subtle" icon={<CalendarCheck2 className="h-3.5 w-3.5" />} loading={mark.isPending && mark.variables === 'completed'} disabled={mark.isPending} onClick={() => mark.mutate('completed')}>{t('bookingStatus.completed')}</Button>}

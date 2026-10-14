@@ -114,3 +114,4 @@ node n8n/tests/run-all.js                                   # everything, stops 
 - The retry handles one event per 5-minute run.
 - Concurrency is tested by simulating a rival's rows at defined points (M9, M10), not with real parallel n8n executions.
 - Grist has no atomic insert-if-absent; the claim → re-read → lowest-id rule is the substitute.
+- A missed call is stored as a `Direction = In` Messages row (`Template = missed_call`), so the weekly report's *Patient messages* and FLOW HQ's *Incoming messages* count it as one inbound item (W9 and FLOW HQ count the same way, so they agree). Call rows carry no `AI_Status`, so no AI statistic is affected.

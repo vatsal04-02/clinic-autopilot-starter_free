@@ -45,3 +45,10 @@ export const staffReply = req('./clinic-modules.js') as {
   cmStaffReplyCheck(row: Rec, conv: Rec | null, lead: Rec | null, settings: Record<string, unknown>, nowMs: number, h: unknown): { action: 'send' | 'reject' | 'hold' | 'none'; reason: string; patch?: Record<string, unknown> | null; claim?: Record<string, unknown>; decision?: { to: string; test_mode: boolean } };
   cmStaffReplyResult(rowId: number, res: Record<string, unknown>, nowSec: number): { message_patch: Record<string, unknown>; conversation_patch: Record<string, unknown> | null; log: Record<string, unknown> };
 };
+// The request-confirmation section's own conflict rule: the FLOW HQ "Confirm" button and the n8n REQ section share these functions, so a
+// confirmation that would double-book is refused the same way in both places.
+export const requestConfirm = req('./request-confirm.js') as {
+  reqcTaken(rows: Rec[], r: Rec): Rec[];
+  reqcCapacity(settings: Record<string, unknown>): number;
+  reqcPlan(appointments: Rec[], leadRows: Rec[], convRecords: Rec[], settings: Record<string, unknown>, nowMs: number, cfg?: { max_per_run?: number }): { items: Array<{ appt_row_id: number; kind: 'confirmed' | 'conflict' | 'declined' }>; held: Array<{ appt_row_id: number; reason: string }> };
+};

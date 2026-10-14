@@ -160,7 +160,7 @@ export function createApp(d: AppDeps) {
 
   app.get('/api/w/:ws/bookings', async (c) => c.json(await B(c).bookings({ view: (c.req.query('view') || 'upcoming') as 'upcoming', q: c.req.query('q') }, X(c))));
   app.patch('/api/w/:ws/bookings/:id', async (c) => {
-    const body = z.object({ status: z.enum(['completed', 'no_show']) }).parse(await c.req.json());
+    const body = z.object({ status: z.enum(['completed', 'no_show', 'scheduled', 'declined']) }).parse(await c.req.json());
     return c.json(await B(c).updateBooking(c.req.param('id'), body.status as BookingStatus, X(c)));
   });
 

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ArrowLeft, Bot, Check, CheckCheck, Clock, Inbox as InboxIcon, Loader2, MessageSquareDashed, PauseCircle, PlayCircle, Search, Send, Sparkles, UserRound, UserRoundCheck } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Bot, Check, CheckCheck, Clock, FlaskConical, Inbox as InboxIcon, Loader2, MessageSquareDashed, PauseCircle, PhoneMissed, PlayCircle, Search, Send, Sparkles, UserRound, UserRoundCheck } from 'lucide-react';
 import type { ChannelKey, Contact, Conversation, Message } from '@core/domain';
 import { api, ApiError, ws as wsPath } from '../lib/api';
 import { useWs } from '../lib/workspace';
@@ -136,7 +136,7 @@ function Thread({ id }: { id: string }) {
               return (
                 <div key={m.id}>
                   {sep && <div className="my-4 flex items-center gap-3 text-[11px] text-muted"><span className="h-px flex-1 bg-line" />{sep}<span className="h-px flex-1 bg-line" /></div>}
-                  <Bubble m={m} automationName={m.author.automationKey ? automation(m.author.automationKey).name : ''} aiName={t('ai.name')} showAi={has('ai')} />
+                  {m.event === 'missed_call' ? <CallEvent m={m} /> : <Bubble m={m} automationName={m.author.automationKey ? automation(m.author.automationKey).name : ''} aiName={t('ai.name')} showAi={has('ai')} />}
                 </div>
               );
             })}
@@ -161,6 +161,7 @@ function Bubble({ m, automationName, aiName, showAi }: { m: Message; automationN
         out && m.author.kind === 'ai' && 'ai-tint rounded-br-md text-fg',
         out && m.author.kind === 'staff' && 'rounded-br-md border-blue/25 bg-blue/[0.07] text-fg',
         out && (m.author.kind === 'automation' || m.author.kind === 'system') && 'rounded-br-md border-line bg-surface-2 text-fg-2',
+        m.status === 'simulated' && 'border-dashed border-amber/50',
         (m.status === 'failed' || m.status === 'needs_template') && 'border-bad/40')}>
         <p className="whitespace-pre-wrap break-words">{m.body}</p>
       </div>
@@ -184,12 +185,25 @@ function Bubble({ m, automationName, aiName, showAi }: { m: Message; automationN
     </div>
   );
 }
+// A missed phone call: an event in the thread, not a message. Its note says what became of the call-back message (in a demo: "nothing was sent").
+function CallEvent({ m }: { m: Message }) {
+  const { f, tt } = useWs();
+  return (
+    <div className="my-1 flex flex-col items-center gap-1 text-center" role="note" aria-label="Missed call">
+      <div className="inline-flex items-center gap-2 rounded-full border border-amber/40 bg-amber/10 px-3 py-1 text-[12.5px] text-fg">
+        <PhoneMissed className="h-3.5 w-3.5 text-amber" />Missed call<span className="text-muted">·</span><span className="num text-fg-2">{time(f, m.createdAt)}</span>
+      </div>
+      {m.statusNote && <span className="text-[11.5px] text-muted">{tt(m.statusNote)}</span>}
+    </div>
+  );
+}
 function SendStatus({ m: raw }: { m: Message }) {
   const { tt } = useWs();
   const m = raw.statusNote ? { ...raw, statusNote: tt(raw.statusNote) } : raw;   // notes may carry terminology tokens
   if (m.status === 'pending') return m.statusNote
     ? <span className="inline-flex items-center gap-1 text-warn" title={m.statusNote}><Clock className="h-3 w-3" />{m.statusNote.slice(0, 90)}</span>   // held by the backend (e.g. quiet hours)
     : <span className="inline-flex items-center gap-1 text-blue-soft"><Loader2 className="h-3 w-3 animate-spin" />queued: goes out within a minute</span>;
+  if (m.status === 'simulated') return <span className="inline-flex items-center gap-1 text-amber" title={m.statusNote || ''}><FlaskConical className="h-3 w-3" />DEMO: not sent</span>;   // worked out and logged, never delivered
   if (m.status === 'queued') return <span className="inline-flex items-center gap-1 text-blue-soft"><Loader2 className="h-3 w-3 animate-spin" />sending</span>;
   if (m.status === 'sent' || m.status === 'delivered' || m.status === 'read') return <span className="inline-flex items-center gap-1 text-fg-2">{m.status === 'read' ? <CheckCheck className="h-3 w-3 text-blue-bright" /> : <Check className="h-3 w-3" />}{m.statusNote ? m.statusNote : ''}</span>;
   return <span className="inline-flex items-center gap-1 text-bad" title={m.statusNote || ''}><AlertTriangle className="h-3 w-3" />{m.status === 'needs_template' ? 'needs a template' : 'not sent'}{m.statusNote ? `: ${m.statusNote.slice(0, 90)}` : ''}</span>;

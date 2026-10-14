@@ -12,8 +12,8 @@ import { dayKey, iso, nextRun, scheduleLabel, sec, startOfDay } from '../../time
 import type { BackendAdapter, BackendWorkspaceInfo, Ctx, Supported, Viewer, WorkspaceBackend, ContactQuery, ConversationQuery, BookingQuery, ActivityQuery, ContactPatch, ConversationPatch } from '../types';
 import { activityFrom, indexes, parseReport, toBooking, toContact, toConversation, toMessage, priorityOf, universal } from './mappers';
 import { AUTOMATIONS as CATALOGUE } from '../../../core/registry';
-import { AUTOMATIONS, AUTOMATION_BY_RUNLOG, BOOKING_SYSTEM, CHANNELS, COLUMNS, KNOWLEDGE_CATEGORIES, REPLY_WINDOW_SEC, SETTINGS, TABLES, isOn, isTestMode } from './schema';
-import { clinicModules, normalizePhone } from './shared';
+import { AUTOMATIONS, AUTOMATION_BY_RUNLOG, BOOKING_SYSTEM, CHANNELS, COLUMNS, KNOWLEDGE_CATEGORIES, REAL_APPT_STATUSES, REPLY_WINDOW_SEC, REQUEST_UID, SETTINGS, TABLES, isOn, isTestMode } from './schema';
+import { clinicModules, normalizePhone, requestConfirm } from './shared';
 
 export interface AutopilotConfig {
   gristBaseUrl: string;
@@ -37,6 +37,10 @@ const PROCESSED = ['replied', 'drafted', 'handed_off', 'no_reply', 'failed'];
 const HANDLED = ['replied', 'no_reply'];
 const PRIORITY_ORDER: Record<Priority, number> = { urgent: 0, high: 1, normal: 2 };
 const LEAD_STATUS_BACK: Record<string, string> = { new: 'New', contacted: 'Contacted', booked: 'Booked', converted: 'Converted', lost: 'Lost' };
+// What is a REAL appointment: Booked / Rescheduled / Completed / No-show. A Requested or Declined request, or a status this version does not know,
+// is never counted, reported or listed as a booking (Cancelled is kept only where the number says "cancelled").
+const isReal = (a: GristRecord) => REAL_APPT_STATUSES.includes(String(a.fields.Status));
+const isRequestRow = (a: GristRecord) => REQUEST_UID.test(String(a.fields.Booking_UID || ''));
 
 interface RegistryRow { slug: string; name: string; docId: string; waConnected: boolean }
 
@@ -110,7 +114,7 @@ class AutopilotWorkspace implements WorkspaceBackend {
   }
 
   async capabilities(viewer: Viewer): Promise<Capabilities> {
-    const appts = await this.appointments();
+    const [appts, settings] = await Promise.all([this.appointments(), this.settingsMap()]);
     return {
       channels: this.info.channels,
       staffReply: true,
@@ -119,6 +123,8 @@ class AutopilotWorkspace implements WorkspaceBackend {
       contactEditable: ['status', 'owner', 'notes', 'nextActionAt'],
       conversationEditable: ['assignedTo', 'automationPaused', 'resolveAttention'],
       bookingStatusUpdate: ['completed', 'no_show'],
+      bookingRequests: true,                                   // requests made in chat are confirmed or declined here (staff and admin)
+      demoMode: isOn(settings.map.demo_mode),                  // a label only: it changes nothing that is sent
       bookingSourceOfTruth: BOOKING_SYSTEM,
       settingsEdit: viewer.role === 'admin',
       knowledgeEdit: viewer.role === 'admin',
@@ -150,7 +156,7 @@ class AutopilotWorkspace implements WorkspaceBackend {
       return {
         new_contacts: nl.length,
         active_conversations: new Set(ib.map((m) => String(m.fields.Conversation))).size,
-        bookings: ap.filter((x) => x.fields.Status !== 'Cancelled').length,
+        bookings: ap.filter(isReal).length,
         completed: completed.length,
         no_shows: ap.filter((x) => x.fields.Status === 'No-show').length,
         ai_handled: pct(processed.filter((m) => HANDLED.includes(String(m.fields.AI_Status))).length, processed.length),
@@ -184,7 +190,7 @@ class AutopilotWorkspace implements WorkspaceBackend {
       { key: 'messages_in', points: bucket(ins, 'Created_At') },
       { key: 'ai_handled', points: bucket(ins, 'Created_At', (m) => HANDLED.includes(String(m.fields.AI_Status))) },
       { key: 'human_handoffs', points: bucket(ins, 'Created_At', (m) => m.fields.AI_Status === 'handed_off') },
-      { key: 'bookings', points: bucket(s.appts, 'Start', (a) => a.fields.Status !== 'Cancelled') },
+      { key: 'bookings', points: bucket(s.appts, 'Start', isReal) },
     ];
     const bookings = (await this.bookings({ view: 'upcoming' }, ctx)).slice(0, 6);
     const recent = (await this.activity({ limit: 12 }, ctx));
@@ -210,7 +216,7 @@ class AutopilotWorkspace implements WorkspaceBackend {
     const contact = toContact(l, s.ix.convByLead.get(id) || null);
     const caps = await this.capabilities(ctx.viewer);
     const bookings = s.appts.filter((a) => String(a.fields.Lead) === id).map((a) => toBooking(a, s.ix, ctx.now, caps.revenue)).sort((a, b) => (b.start || '').localeCompare(a.start || ''));
-    const activity = activityFrom([l], s.msgs, s.logs, s.ix).filter((a) => a.contactId === id).slice(0, 60);
+    const activity = activityFrom([l], s.msgs, s.logs, s.ix, s.appts).filter((a) => a.contactId === id).slice(0, 60);
     return { contact, bookings, activity };
   }
   async updateContact(id: string, patch: ContactPatch, ctx: Ctx): Promise<Contact> {
@@ -292,15 +298,24 @@ class AutopilotWorkspace implements WorkspaceBackend {
     const today = startOfDay(ctx.now, this.info.timezone);
     const t = (b: Booking) => (b.start ? Date.parse(b.start) : 0);
     const v = q.view || 'upcoming';
-    if (v === 'upcoming') out = out.filter((b) => t(b) >= today && b.status !== 'cancelled').sort((a, b) => t(a) - t(b));
-    else if (v === 'past') out = out.filter((b) => t(b) < ctx.now).sort((a, b) => t(b) - t(a));
-    else if (v === 'needs_outcome') out = out.filter((b) => b.needsOutcome).sort((a, b) => t(b) - t(a));
-    else out.sort((a, b) => t(b) - t(a));
+    // Requests live in their own view. Every other view lists real bookings only (the 'all' view also shows rows whose status this version does not
+    // understand, labelled "Not confirmed", so nothing is silently hidden).
+    const request = (b: Booking) => b.status === 'requested' || b.status === 'declined' || !!(b.ref && REQUEST_UID.test(b.ref));
+    if (v === 'requests') {
+      out = out.filter(request).sort((a, b) => Number(b.status === 'requested') - Number(a.status === 'requested') || (a.status === 'requested' ? t(a) - t(b) : t(b) - t(a)));
+    } else {
+      out = out.filter((b) => b.status !== 'requested' && b.status !== 'declined' && (v === 'all' || b.status !== 'unknown'));
+      if (v === 'upcoming') out = out.filter((b) => t(b) >= today && b.status !== 'cancelled').sort((a, b) => t(a) - t(b));
+      else if (v === 'past') out = out.filter((b) => t(b) < ctx.now).sort((a, b) => t(b) - t(a));
+      else if (v === 'needs_outcome') out = out.filter((b) => b.needsOutcome).sort((a, b) => t(b) - t(a));
+      else out.sort((a, b) => t(b) - t(a));
+    }
     const needle = (q.q || '').trim().toLowerCase();
     if (needle) out = out.filter((b) => [b.contactName, b.service, b.owner, b.ref].some((x) => x && x.toLowerCase().includes(needle)));
     return out;
   }
   async updateBooking(id: string, status: BookingStatus, ctx: Ctx): Promise<Booking> {
+    if (status === 'scheduled' || status === 'declined') return this.decideRequest(id, status, ctx);
     if (status !== 'completed' && status !== 'no_show') throw new BackendError(400, 'invalid', 'Only Completed or No-show can be set here: other changes come from the booking system');
     const a = (await this.appointments()).find((x) => String(x.id) === id);
     if (!a) throw new BackendError(404, 'not_found', 'Not found');
@@ -308,6 +323,29 @@ class AutopilotWorkspace implements WorkspaceBackend {
     const start = sec(a.fields.Start);
     if (!start || start * 1000 > ctx.now) throw new BackendError(409, 'in_future', 'It has not started yet');
     await this.grist.update(this.docId, TABLES.appointments, [{ id: Number(id), fields: { Status: status === 'completed' ? 'Completed' : 'No-show' } }]);
+    this.invalidate(TABLES.appointments);
+    const s = await this.snap();
+    const caps = await this.capabilities(ctx.viewer);
+    return toBooking(s.appts.find((x) => String(x.id) === id)!, s.ix, ctx.now, caps.revenue);
+  }
+
+  // A request made in chat (Status Requested, Booking_UID "req-...") is confirmed or declined by a person. This only sets the row's Status; the
+  // REQ section of the workflow then tells the patient (through the one messaging gateway, with its opt-out / quiet-hours / test-mode checks).
+  // The conflict rule is the workflow's own (request-confirm.js), so "Confirm" here and the automation can never disagree about a double booking.
+  private async decideRequest(id: string, status: 'scheduled' | 'declined', ctx: Ctx): Promise<Booking> {
+    const rows = await this.appointments();
+    const a = rows.find((x) => String(x.id) === id);
+    if (!a) throw new BackendError(404, 'not_found', 'Not found');
+    if (a.fields.Status !== 'Requested' || !isRequestRow(a)) throw new BackendError(409, 'not_a_request', 'Only a request that is still waiting can be confirmed or declined');
+    if (status === 'scheduled') {
+      const start = sec(a.fields.Start);
+      if (!start) throw new BackendError(409, 'no_time', 'This request has no time');
+      if (start * 1000 < ctx.now - 3600000) throw new BackendError(409, 'passed', 'The requested time has already passed: decline it or ask the contact for a new time');
+      const settings = (await this.settingsMap()).map;
+      const taken = requestConfirm.reqcTaken(rows as never, a as never);
+      if (taken.length >= requestConfirm.reqcCapacity(settings)) throw new BackendError(409, 'slot_taken', 'That time is already taken by another appointment. Decline this request, or move the other appointment first.');
+    }
+    await this.grist.update(this.docId, TABLES.appointments, [{ id: Number(id), fields: { Status: status === 'scheduled' ? 'Booked' : 'Declined' } }]);
     this.invalidate(TABLES.appointments);
     const s = await this.snap();
     const caps = await this.capabilities(ctx.viewer);
@@ -348,6 +386,11 @@ class AutopilotWorkspace implements WorkspaceBackend {
         if (on && requirements.some((r) => !r.ok)) status = 'needs_setup';
       } else if (key === 'weekly_reports') {
         control = { kind: 'toggle', value: isOn(v('weekly_report_whatsapp')) ? 'on' : 'off', options: [{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }], label: 'Owner copy on WhatsApp' };
+      }
+      if (key === 'request_confirmation') {
+        const on = String(v('booking_mode') || '').trim().toLowerCase() === 'request';
+        status = on ? 'always_on' : 'off';
+        requirements.push({ label: 'Booking by the assistant is set to Request', ok: on });
       }
       if (key === 'booking_reminders' || key === 'follow_ups' || key === 'outcome_checkins' || key === 'review_requests') requirements.push({ label: 'Test mode off (messages reach real recipients)', ok: !isTestMode(v('TEST_MODE')) });
       if (status !== 'off' && lastFailed && lastRow && lastFailed === lastRow) status = 'attention';
@@ -405,6 +448,12 @@ class AutopilotWorkspace implements WorkspaceBackend {
       out.push({ id: `failed-${m.id}`, kind: 'reply_failed', priority: 'high', dueAt: iso(t), contactId: l ? String(l.id) : null, contactName: name(l), conversationId: conv ? String(conv.id) : null, bookingId: null, detail: m.fields.AI_Reason ? universal(String(m.fields.AI_Reason)) : String(m.fields.Status) });
     }
     for (const a of s.appts) {
+      if (a.fields.Status === 'Requested' && isRequestRow(a)) {   // a request waiting for a person: never a booking until someone confirms it
+        const b = toBooking(a, s.ix, now, false);
+        if (!b.start || Date.parse(b.start) < now - 3600000) continue;
+        out.push({ id: `request-${a.id}`, kind: 'booking_request', priority: 'high', dueAt: b.requestedAt || b.start, contactId: b.contactId, contactName: b.contactName, conversationId: null, bookingId: b.id, detail: [b.service, b.start].filter(Boolean).join(' · ') });
+        continue;
+      }
       const b = toBooking(a, s.ix, now, false);
       if (!b.needsOutcome || !b.start || now - Date.parse(b.start) > 60 * DAY) continue;
       out.push({ id: `outcome-${a.id}`, kind: 'booking_outcome', priority: 'normal', dueAt: b.start, contactId: b.contactId, contactName: b.contactName, conversationId: null, bookingId: b.id, detail: b.service });
@@ -427,7 +476,7 @@ class AutopilotWorkspace implements WorkspaceBackend {
   // ---------------------------------------------------------------- activity, reports, analytics
   async activity(q: ActivityQuery, _ctx?: Ctx): Promise<import('../../../core/domain').Activity[]> {
     const s = await this.snap();
-    let out = activityFrom(s.leads, s.msgs, s.logs, s.ix);
+    let out = activityFrom(s.leads, s.msgs, s.logs, s.ix, s.appts);
     if (q.kind) out = out.filter((a) => a.kind === q.kind);
     if (q.contactId) out = out.filter((a) => a.contactId === q.contactId);
     return out.slice(0, Math.min(q.limit || 100, 500));
@@ -447,7 +496,8 @@ class AutopilotWorkspace implements WorkspaceBackend {
     const last = clinicModules.cmWeekWindow(ctx.now);
     const win = week === 'this' ? { start: last.end, end: last.end + 7 * 86400, label: 'this week so far' } : last;
     const cap = this.limit();
-    const m = clinicModules.cmWeeklyMetrics({ leads: s.leads, appointments: s.appts, conversations: s.convs, messages: s.msgs, runlog: s.logs }, ctx.now, win, { messages: cap, runlog: cap });
+    // the weekly numbers count real appointments only: a request, or a declined one, is not an appointment (the n8n weekly report is patched the same way)
+    const m = clinicModules.cmWeeklyMetrics({ leads: s.leads, appointments: s.appts.filter((a) => isReal(a) || a.fields.Status === 'Cancelled'), conversations: s.convs, messages: s.msgs, runlog: s.logs }, ctx.now, win, { messages: cap, runlog: cap });
     const metric = (key: string, category: AnalyticsMetric['category'], label: string, value: number | null, unit: AnalyticsMetric['unit'] = 'count'): AnalyticsMetric => ({ key, category, label, value, unit });
     const pct = (n: number, d: number) => (d ? Math.round((n / d) * 1000) / 10 : null);
     const metrics: AnalyticsMetric[] = [

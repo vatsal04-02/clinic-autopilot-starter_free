@@ -172,6 +172,17 @@ Names shown are for the physiotherapy profile; other industries rename them.
 | W11 error trigger | `error_alerts` | Error Alerts | Automations card (it writes no Run_Log rows, so no counts) | none |
 | W12 messaging gateway | (the only sender) | shown as "messaging gateway" | Channels, Team Replies reference `W10 → W12` | none |
 | W13 AI receptionist | `ai_assistant` | AI Receptionist | AI page, Inbox decision chips, dashboard *AI handled / handoffs* | `ai_mode` off / draft / auto |
+| MCC missed-call capture (demo) | `missed_call_capture` | Missed Calls | Inbox (a *Missed call* event in the thread, with what became of the call-back), Activity *Missed call* | `missed_call_enabled` on / off |
+| REQ request confirmation (demo) | `request_confirmation` | Appointment Requests | Bookings > *Requests* (Confirm / Decline), Tasks *Request to confirm*, Activity | none: runs when `booking_mode` = request |
+
+### F.1 Appointment requests and demo labels (additive; nothing changes for a clinic that does not use request mode)
+
+- **A request is never a booking.** `Appointments.Status = Requested` (made in chat by W13 in request mode) and `Declined` map to `requested` / `declined`; **an unknown status maps to `unknown` ("Not confirmed"), never to `scheduled`**. Requests are listed only in *Bookings > Requests*; they are excluded from Upcoming / Past / Needs outcome / All, from the dashboard and its series, from Analytics (the weekly numbers equal a clinic without any request) and show no reminder / review chips or fee.
+- **Confirm / Decline** (`PATCH /api/w/:ws/bookings/:id` with `scheduled` or `declined`; staff or admin; CSRF header and workspace access as everywhere): only a *waiting* request (`Requested` + `Booking_UID` `req-…`) can be decided, a time that has passed cannot be confirmed (`409 passed`), and a time another appointment holds cannot be confirmed (`409 slot_taken`) — the check is `reqcTaken` / `reqcCapacity` from `n8n/snippets/request-confirm.js`, **the same functions the REQ n8n section runs**, so the button and the automation cannot disagree (lowest row id keeps a slot; tested as a parity test). FLOW HQ only sets `Status`; it writes no message. The REQ automation then tells the contact through the one messaging gateway (opt-out, quiet hours, test mode, 24 h window all apply). A confirmed request whose contact has not been told shows *Contact not told yet*.
+- **Missed calls** show as an event in the thread ("Missed call · time"), never as a message, with a note: *demo, nothing was sent* / *accepted by WhatsApp (not yet delivered)* / *waits for the morning* / *failed*.
+- **Simulated messages** (W12 `simulate` mode: `Sent_By` contains `[DEMO simulated…` or `Body` starts `[DEMO simulated, not sent]`) get status `simulated`: shown as **"DEMO: not sent"** (dashed bubble), listed in Activity as *Demo: message not sent*, never as sent / delivered / an AI reply. The number a demo message "would go to" stays in the server and is not sent to the browser.
+- **Header badge** *DEMO · nothing is sent* when the workspace Setting `demo_mode` is on. It is a label only: whether anything is sent is decided in the messaging workflow (`w12_send_mode`), never by this flag.
+- Known limit: a missed call is a `Direction = In` row, so "Incoming messages" (dashboard series, weekly report *Patient messages*) counts it as one inbound item; n8n's W9 and FLOW HQ do the same, so the numbers still agree.
 
 ## G. Environment variables (`flowhq/.env.example`)
 
@@ -237,11 +248,11 @@ The image is `flowhq/Dockerfile`, built from the repository root so it includes 
 | Suite | Command | Result |
 |---|---|---|
 | Typecheck (strict, web + server + tests) | `npm run typecheck` | clean |
-| Unit + adapter + API | `npm test` | **82 / 82 passed** (4 files) |
+| Unit + adapter + API + requests | `npm test` | **103 / 103 passed** (5 files) |
 | End-to-end, real browser, demo data | `npm run build && npm run test:e2e` | **22 / 22 steps passed**, screenshots in `tests/e2e/screenshots` |
 | Production build | `npm run build` | web + server bundle OK |
 | Production layout smoke | prod deps only + snippets copy | starts; refuses to start without backend settings |
-| Existing n8n suite (unchanged) | `node n8n/tests/run-all.js` | 45 / 45 files pass |
+| Full n8n suite | `node n8n/tests/run-all.js` | 68 / 68 files pass |
 
 **What the tests check:**
 - **core:** terminology, all 14 profiles resolving every label, module resolution.

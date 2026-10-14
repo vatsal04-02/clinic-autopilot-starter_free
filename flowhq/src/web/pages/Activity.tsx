@@ -15,10 +15,10 @@ import { ActivityRow } from '../components/data/widgets';
 
 const GROUPS: Record<string, { label: string; kinds: ActivityKind[] | null }> = {
   all: { label: 'Everything', kinds: null },
-  people: { label: '{contact.plural}', kinds: ['contact_created', 'message_received', 'contact_escalated'] },
+  people: { label: '{contact.plural}', kinds: ['contact_created', 'message_received', 'missed_call', 'contact_escalated'] },
   ai: { label: '{ai.short}', kinds: ['ai_replied', 'ai_handoff'] },
-  bookings: { label: '{booking.plural}', kinds: ['booking_created', 'booking_rescheduled', 'booking_cancelled'] },
-  messages: { label: 'Automated messages', kinds: ['reminder_sent', 'follow_up_sent', 'outcome_checkin_sent', 'review_requested', 'message_sent', 'staff_replied', 'report_generated'] },
+  bookings: { label: '{booking.plural}', kinds: ['booking_created', 'booking_requested', 'request_confirmed', 'request_declined', 'booking_rescheduled', 'booking_cancelled'] },
+  messages: { label: 'Automated messages', kinds: ['reminder_sent', 'follow_up_sent', 'outcome_checkin_sent', 'review_requested', 'message_sent', 'message_simulated', 'staff_replied', 'report_generated'] },
   problems: { label: 'Problems', kinds: ['automation_failed', 'automation_skipped'] },
 };
 

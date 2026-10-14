@@ -13,7 +13,7 @@ import { Button, Card, Segmented } from '../components/ui/primitives';
 import { EmptyState, ErrorState, SkeletonRows, useToast } from '../components/ui/feedback';
 import { TaskRow } from '../components/data/widgets';
 
-const ORDER: TaskKind[] = ['reply_needed', 'reply_failed', 'first_response', 'next_action_due', 'booking_outcome'];
+const ORDER: TaskKind[] = ['reply_needed', 'booking_request', 'reply_failed', 'first_response', 'next_action_due', 'booking_outcome'];
 
 export default function Tasks() {
   const { ws, tt } = useWs();
@@ -55,9 +55,17 @@ function TaskAction({ task }: { task: Task }) {
   const toast = useToast();
   const mark = useMutation({
     mutationFn: (status: BookingStatus) => api<Booking>(wsPath(ws.id, `/bookings/${task.bookingId}`), { method: 'PATCH', body: { status } }),
-    onSuccess: (r) => { toast('ok', `${task.contactName || t('booking.singular')}: ${t(`bookingStatus.${r.status}`).toLowerCase()}`); qc.invalidateQueries({ queryKey: ['tasks', ws.id] }); qc.invalidateQueries({ queryKey: ['bookings', ws.id] }); qc.invalidateQueries({ queryKey: ['dashboard', ws.id] }); },
+    onSuccess: (r) => { toast('ok', task.kind === 'booking_request' ? `${task.contactName || t('contact.singular')}: ${r.status === 'declined' ? 'declined' : 'confirmed'}, they are told automatically` : `${task.contactName || t('booking.singular')}: ${t(`bookingStatus.${r.status}`).toLowerCase()}`); qc.invalidateQueries({ queryKey: ['tasks', ws.id] }); qc.invalidateQueries({ queryKey: ['bookings', ws.id] }); qc.invalidateQueries({ queryKey: ['dashboard', ws.id] }); },
     onError: (e: Error) => toast('bad', e.message),
   });
+  if (task.kind === 'booking_request' && task.bookingId && caps.bookingRequests) {
+    return (
+      <div className="flex shrink-0 gap-1.5">
+        <Button size="sm" variant="subtle" loading={mark.isPending && mark.variables === 'scheduled'} disabled={mark.isPending} onClick={() => mark.mutate('scheduled')}>Confirm</Button>
+        <Button size="sm" variant="ghost" loading={mark.isPending && mark.variables === 'declined'} disabled={mark.isPending} onClick={() => mark.mutate('declined')}>Decline</Button>
+      </div>
+    );
+  }
   if (task.kind === 'booking_outcome' && task.bookingId && caps.bookingStatusUpdate.length) {
     return (
       <div className="flex shrink-0 gap-1.5">

@@ -15,9 +15,9 @@ const BASE = JSON.parse(fs.readFileSync(built, 'utf8'));
 const node = (w, n) => { const x = w.nodes.find((y) => y.name === n); assert(x, `no node ${n}`); return x; };
 const code = (w, names, from, to) => { for (const n of [].concat(names)) { const x = node(w, n); assert(x.parameters.jsCode.includes(from), `${n}: mutation target missing: ${from.slice(0, 70)}`); x.parameters.jsCode = x.parameters.jsCode.split(from).join(to); } };
 const M = [
-  ['no conflict check: a confirmation over a taken slot goes through', (w) => code(w, 'REQ – Plan', 'if (taken.length >= capacity) {', 'if (false) {'), ['C6', 'C7', 'C8']],
-  ['two simultaneous confirmations both refused (no "lowest id wins")', (w) => code(w, 'REQ – Plan', ' && !(isCandidate(o) && o.id > r.id)', ''), ['C7']],
-  ['capacity from Settings is ignored (always 1)', (w) => code(w, 'REQ – Plan', 'const capacity = Number.isFinite(capNum) && capNum >= 1 && capNum <= 20 ? Math.round(capNum) : 1;', 'const capacity = 1;'), ['C7']],
+  ['no conflict check: a confirmation over a taken slot goes through', (w) => code(w, 'REQ – Plan', 'if (taken.length >= capacity) items.push(', 'if (false) items.push('), ['C6', 'C7', 'C8']],
+  ['two simultaneous confirmations both refused (no "lowest id wins")', (w) => code(w, 'REQ – Plan', ' && !(reqcIsCandidate(o) && o.id > r.id)', ''), ['C7']],
+  ['capacity from Settings is ignored (always 1)', (w) => code(w, 'REQ – Plan', 'const capacity = reqcCapacity(settings);', 'const capacity = 1;'), ['C7']],
   ['the refusal does not put the row back to Requested', (w) => code(w, 'REQ – Prepare conflict', "fields: { Status: 'Requested' }", "fields: { Status: 'Booked' }"), ['C6', 'C8']],
   ['a refused confirmation still tells the patient', (w) => { w.connections['REQ – Conflict?'].main[0] = [{ node: 'REQ – Decide send', type: 'main', index: 0 }]; }, ['C6', 'C7', 'C8']],
   ['no claim before the send (Confirm_Sent never written first)', (w) => { w.connections['REQ – Build Message'].main[0] = [{ node: 'REQ – Restore', type: 'main', index: 0 }]; }, ['C2', 'C5', 'C12']],

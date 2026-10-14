@@ -6,7 +6,7 @@ import type {
 } from '../../../core/domain';
 import type { GristRecord } from '../../grist';
 import { iso, sec } from '../../time';
-import { APPT_STATUS, AUTOMATION_BY_RUNLOG, BOOKING_SYSTEM, LEAD_STATUS, REPLY_WINDOW_SEC, SENDERS } from './schema';
+import { APPT_STATUS, AUTOMATION_BY_RUNLOG, BOOKING_SYSTEM, LEAD_STATUS, REPLY_WINDOW_SEC, REQUEST_UID, SENDERS, SENDER_NAMES } from './schema';
 
 const txt = (v: unknown): string | null => { const s = v === null || v === undefined ? '' : String(v).trim(); return s ? s : null; };
 const STAGES: ContactStage[] = ['hot', 'warm', 'cold'];
@@ -76,17 +76,23 @@ export function toContact(l: GristRecord, conv: GristRecord | null): Contact {
 
 export function toBooking(a: GristRecord, ix: Indexes, now: number, showValue: boolean): Booking {
   const f = a.fields;
-  const status = (APPT_STATUS as Record<string, BookingStatus>)[String(f.Status ?? '')] || 'scheduled';
+  // An unknown Status is never read as "scheduled": a row this version does not understand must not be reported as a confirmed booking.
+  const status = (APPT_STATUS as Record<string, BookingStatus>)[String(f.Status ?? '')] || 'unknown';
   const lead = ix.leadsById.get(String(f.Lead ?? ''));
   const uid = txt(f.Booking_UID);
   const start = sec(f.Start);
+  const isRequest = !!uid && REQUEST_UID.test(uid);
+  const unconfirmed = status === 'requested' || status === 'declined' || status === 'unknown';
   const done: Booking['automationsDone'] = [];
   const mark = (col: string, key: AutomationKey, label: string) => { if (f[col]) done.push({ key, at: iso(f[col]), label }); };
-  mark('R24_Sent', 'booking_reminders', 'Day-before reminder');
-  mark('R2_Sent', 'booking_reminders', 'Same-day reminder');
-  mark('Rebook_Sent', 'follow_ups', 'New time offered');
-  mark('Outcome_Sent', 'outcome_checkins', 'Check-in sent');
-  mark('Review_Sent', 'review_requests', 'Review requested');
+  if (!unconfirmed) {
+    mark('R24_Sent', 'booking_reminders', 'Day-before reminder');
+    mark('R2_Sent', 'booking_reminders', 'Same-day reminder');
+    mark('Rebook_Sent', 'follow_ups', 'New time offered');
+    mark('Outcome_Sent', 'outcome_checkins', 'Check-in sent');
+    mark('Review_Sent', 'review_requests', 'Review requested');
+  }
+  if (isRequest && f.Confirm_Sent) done.push({ key: 'request_confirmation', at: iso(f.Confirm_Sent), label: status === 'declined' ? 'Contact told: declined' : 'Contact told: confirmed' });
   return {
     id: String(a.id),
     ref: uid,
@@ -98,8 +104,13 @@ export function toBooking(a: GristRecord, ix: Indexes, now: number, showValue: b
     status,
     owner: txt(f.Physio),
     service: txt(f.Service),
-    source: uid && uid.startsWith('wa-') ? { kind: 'assistant', label: 'Booked in chat' } : { kind: 'external_calendar', label: BOOKING_SYSTEM },
-    value: showValue && typeof f.Fee_INR === 'number' ? (f.Fee_INR as number) : null,
+    source: status === 'requested' || status === 'declined' ? { kind: 'assistant', label: 'Requested in chat' }
+      : uid && uid.startsWith('wa-') ? { kind: 'assistant', label: 'Booked in chat' }
+        : isRequest ? { kind: 'assistant', label: 'Requested in chat, confirmed by the team' }
+          : { kind: 'external_calendar', label: BOOKING_SYSTEM },
+    requestedAt: isRequest || status === 'requested' ? iso(f.Requested_At) : null,
+    announced: isRequest ? !!f.Confirm_Sent : undefined,
+    value: showValue && !unconfirmed && typeof f.Fee_INR === 'number' ? (f.Fee_INR as number) : null,
     needsOutcome: (status === 'scheduled' || status === 'rescheduled') && !!start && start * 1000 < now - 3600000,
     automationsDone: done,
   };
@@ -133,18 +144,24 @@ export function toConversation(c: GristRecord, lead: GristRecord | null, last: G
   };
 }
 
-// Messages.Sent_By: "Patient" / "W13-ai-receptionist" / "W5-reminders (TEST_MODE: sent to ...)" / a person's name.
+// Messages.Sent_By: "Patient" / "W13-ai-receptionist" / "W5-reminders (TEST_MODE: sent to ...)" / "W12-missed-call-ack [DEMO simulated: ...]" / a person's name.
+// The phone number a DEMO message "would go to" is in Sent_By; it is never copied into the author.
+export const DEMO_SIM = /\[DEMO simulated/;
+export const DEMO_SIM_PREFIX = /^\[DEMO simulated, not sent\]\s*/;
 export function authorOf(m: GristRecord, contactName: string): Message['author'] {
   const f = m.fields;
   const by = txt(f.Sent_By) || '';
   const testMode = /TEST_MODE/.test(by);
+  if (f.Direction === 'In' && f.Template === 'missed_call') return { kind: 'system', name: 'Phone', automationKey: 'missed_call_capture', testMode: false };
   if (f.Direction === 'In') return { kind: 'contact', name: contactName, automationKey: null, testMode: false };
+  const named = Object.keys(SENDER_NAMES).find((n) => by === n || by.startsWith(`${n} `) || by.startsWith(`${n}(`));
+  if (named) return { kind: 'automation', name: '', automationKey: SENDER_NAMES[named], testMode };
   const w = by.match(/^W(\d+)(?!\w)/);
   if (w) {
     const key = SENDERS[`W${w[1]}`] || null;
     if (key === 'ai_assistant') return { kind: 'ai', name: '', automationKey: key, testMode };
     if (key) return { kind: 'automation', name: '', automationKey: key, testMode };
-    return { kind: 'system', name: by.replace(/\s*\(TEST_MODE.*$/, ''), automationKey: null, testMode };
+    return { kind: 'system', name: by.replace(/\s*[([].*$/, ''), automationKey: null, testMode };
   }
   return { kind: 'staff', name: by || 'Team', automationKey: 'staff_reply', testMode: false };
 }
@@ -154,6 +171,7 @@ export const universal = (s: string | null) => (s ? s.replace(/\bpatient's\b/gi,
 export function statusOf(m: GristRecord): { status: MessageStatus; note: string | null } {
   const f = m.fields;
   if (f.Direction === 'In') return { status: 'received', note: null };
+  if (DEMO_SIM.test(String(f.Sent_By ?? '')) || DEMO_SIM_PREFIX.test(String(f.Body ?? ''))) return { status: 'simulated', note: 'Demo: nothing was sent' };
   const s = String(f.Status ?? '');
   const wa = txt(f.WA_Message_ID);
   const reason = universal(txt(f.AI_Reason));
@@ -166,19 +184,34 @@ export function statusOf(m: GristRecord): { status: MessageStatus; note: string 
   return { status: 'sent', note: null };
 }
 
+// What became of the call-back message for a missed call (Messages.AI_Action on the call row: "mcc:..." written by the missed-call section).
+export function callNote(state: string | null): string | null {
+  switch (state) {
+    case 'mcc:ack_simulated': return 'Call-back message: demo, nothing was sent';
+    case 'mcc:ack_sent': return 'Call-back message accepted by WhatsApp (not yet delivered)';
+    case 'mcc:ack_deferred': return 'Call-back message waits for the morning';
+    case 'mcc:ack_failed': return 'Call-back message failed';
+    case 'mcc:ack_skipped': return 'No call-back message (opted out, or a person has this chat)';
+    case 'mcc:claimed': case 'mcc:ack_pending': return 'Being processed';
+    default: return null;
+  }
+}
+
 export function toMessage(m: GristRecord, contactName: string): Message {
   const f = m.fields;
   const st = statusOf(m);
-  const hasAi = f.Direction === 'In' && (f.AI_Status || f.Intent);
+  const isCall = f.Direction === 'In' && f.Template === 'missed_call';
+  const hasAi = f.Direction === 'In' && !isCall && (f.AI_Status || f.Intent);
   return {
     id: String(m.id),
     conversationId: String(f.Conversation ?? ''),
     direction: f.Direction === 'In' ? 'in' : 'out',
-    body: String(f.Body ?? ''),
-    template: txt(f.Template),
+    body: String(f.Body ?? '').replace(DEMO_SIM_PREFIX, ''),
+    template: f.Direction === 'In' && f.Template === 'missed_call' ? null : txt(f.Template),
+    event: f.Direction === 'In' && f.Template === 'missed_call' ? 'missed_call' : null,
     author: authorOf(m, contactName),
     status: st.status,
-    statusNote: st.note,
+    statusNote: isCall ? callNote(txt(f.AI_Action)) : st.note,
     createdAt: iso(f.Created_At),
     externalId: txt(f.WA_Message_ID),
     ai: hasAi ? {
@@ -197,7 +230,7 @@ export function toMessage(m: GristRecord, contactName: string): Message {
 const SEND_KIND: Partial<Record<AutomationKey, ActivityKind>> = {
   booking_reminders: 'reminder_sent', follow_ups: 'follow_up_sent', outcome_checkins: 'outcome_checkin_sent', review_requests: 'review_requested', speed_to_lead: 'message_sent', weekly_reports: 'message_sent',
 };
-export function activityFrom(leads: GristRecord[], messages: GristRecord[], runLog: GristRecord[], ix: Indexes): Activity[] {
+export function activityFrom(leads: GristRecord[], messages: GristRecord[], runLog: GristRecord[], ix: Indexes, appts: GristRecord[] = []): Activity[] {
   const out: Activity[] = [];
   const contactOfConv = (convId: unknown) => { const c = ix.convById.get(String(convId ?? '')); const l = c ? ix.leadsById.get(String(c.fields.Lead ?? '')) : undefined; return { c, l }; };
   const nameOf = (l?: GristRecord) => (l ? txt(l.fields.Name) || txt(l.fields.Phone) : null);
@@ -210,19 +243,41 @@ export function activityFrom(leads: GristRecord[], messages: GristRecord[], runL
     if (!at) continue;
     const { c, l } = contactOfConv(m.fields.Conversation);
     const base = { contactId: l ? String(l.id) : null, contactName: nameOf(l) || (c ? txt(c.fields.Phone) : null), conversationId: c ? String(c.id) : null, bookingRef: null };
-    const body = txt(m.fields.Body)?.slice(0, 120) || null;
+    const body = txt(String(m.fields.Body ?? '').replace(DEMO_SIM_PREFIX, ''))?.slice(0, 120) || null;
     if (m.fields.Direction === 'In') {
+      if (m.fields.Template === 'missed_call') {   // a phone call, not a message
+        out.push({ id: `call-${m.id}`, kind: 'missed_call', at, ...base, automationKey: 'missed_call_capture', outcome: 'ok', detail: [body, callNote(txt(m.fields.AI_Action))].filter(Boolean).join(' · ') || null });
+        continue;
+      }
       out.push({ id: `msg-${m.id}`, kind: 'message_received', at, ...base, automationKey: 'inbound_messaging', outcome: 'ok', detail: body });
       if (m.fields.AI_Status === 'handed_off') out.push({ id: `handoff-${m.id}`, kind: 'ai_handoff', at, ...base, automationKey: 'ai_assistant', outcome: 'ok', detail: txt(m.fields.AI_Reason) });
       continue;
     }
     const a = authorOf(m, '');
     const st = statusOf(m).status;
+    if (st === 'simulated') {   // DEMO: worked out, not sent. Never listed as sent / replied / delivered.
+      out.push({ id: `msg-${m.id}`, kind: 'message_simulated', at, ...base, automationKey: a.automationKey, outcome: 'ok', detail: body });
+      continue;
+    }
     if (st === 'pending' || st === 'queued') continue;
     const failed = st === 'failed' || st === 'needs_template';
     if (a.kind === 'ai') out.push({ id: `msg-${m.id}`, kind: 'ai_replied', at, ...base, automationKey: 'ai_assistant', outcome: failed ? 'failed' : 'ok', detail: body });
     else if (a.kind === 'staff') out.push({ id: `msg-${m.id}`, kind: failed ? 'automation_failed' : 'staff_replied', at, ...base, automationKey: 'staff_reply', outcome: failed ? 'failed' : 'ok', detail: failed ? txt(m.fields.AI_Reason) : body });
     else if (a.automationKey) out.push({ id: `msg-${m.id}`, kind: failed ? 'automation_failed' : SEND_KIND[a.automationKey] || 'message_sent', at, ...base, automationKey: a.automationKey, outcome: failed ? 'failed' : 'ok', detail: body });
+  }
+  // appointment REQUESTS: made in chat, answered by a person. (A booking made in the booking system is listed from W4's Run_Log row below.)
+  for (const a of appts) {
+    const f = a.fields;
+    const uid = txt(f.Booking_UID);
+    if (!uid || !REQUEST_UID.test(uid)) continue;
+    const lead = ix.leadsById.get(String(f.Lead ?? ''));
+    const base = { contactId: lead ? String(lead.id) : null, contactName: nameOf(lead), conversationId: lead && ix.convByLead.get(String(lead.id)) ? String(ix.convByLead.get(String(lead.id))!.id) : null, bookingRef: uid };
+    const when = txt(f.Service) ? `${txt(f.Service)}, ${iso(f.Start) || ''}` : iso(f.Start);
+    const asked = iso(f.Requested_At);
+    if (asked) out.push({ id: `req-${a.id}`, kind: 'booking_requested', at: asked, ...base, automationKey: 'ai_assistant', outcome: 'ok', detail: when });
+    const told = iso(f.Confirm_Sent);
+    if (told && f.Status === 'Booked') out.push({ id: `req-ok-${a.id}`, kind: 'request_confirmed', at: told, ...base, automationKey: 'request_confirmation', outcome: 'ok', detail: when });
+    else if (told && f.Status === 'Declined') out.push({ id: `req-no-${a.id}`, kind: 'request_declined', at: told, ...base, automationKey: 'request_confirmation', outcome: 'ok', detail: when });
   }
   for (const r of runLog) {
     const f = r.fields;

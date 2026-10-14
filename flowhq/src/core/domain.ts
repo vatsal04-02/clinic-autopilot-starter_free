@@ -18,7 +18,8 @@ export type ModuleKey =
 
 export type AutomationKey =
   | 'contact_capture' | 'inbound_messaging' | 'speed_to_lead' | 'booking_sync' | 'booking_reminders' | 'follow_ups'
-  | 'outcome_checkins' | 'review_requests' | 'ai_assistant' | 'weekly_reports' | 'staff_reply' | 'error_alerts';
+  | 'outcome_checkins' | 'review_requests' | 'ai_assistant' | 'weekly_reports' | 'staff_reply' | 'error_alerts'
+  | 'missed_call_capture' | 'request_confirmation';
 
 export type MetricKey =
   | 'new_contacts' | 'active_conversations' | 'bookings' | 'completed' | 'pending_actions' | 'ai_handled'
@@ -51,7 +52,9 @@ export interface Capabilities {
   contactFields: ContactField[];                // fields the backend stores (others are never shown as empty boxes)
   contactEditable: Array<'status' | 'owner' | 'notes' | 'nextActionAt'>;
   conversationEditable: Array<'assignedTo' | 'automationPaused' | 'resolveAttention'>;
-  bookingStatusUpdate: BookingStatus[];         // statuses staff may set (others come from the booking system)
+  bookingStatusUpdate: BookingStatus[];         // statuses staff may set on a past booking (completed / no-show); others come from the booking system
+  bookingRequests: boolean;                     // the backend creates REQUESTS (not bookings) that staff confirm or decline in the Requests view
+  demoMode: boolean;                            // the workspace runs on demo settings: nothing real is sent, labels say so
   bookingSourceOfTruth: string | null;          // e.g. the external calendar's name: shown, never edited here
   settingsEdit: boolean;
   knowledgeEdit: boolean;
@@ -99,7 +102,10 @@ export interface Contact {
 export type Priority = 'urgent' | 'high' | 'normal';
 
 // ---------------------------------------------------------------- bookings
-export type BookingStatus = 'scheduled' | 'rescheduled' | 'cancelled' | 'completed' | 'no_show';
+// 'requested' = asked for in chat (or by the assistant) and NOT confirmed: it is not a booking until a person confirms it. 'declined' = a request a person
+// said no to. 'unknown' = a status this version does not know: it is never shown or counted as confirmed.
+export type BookingStatus = 'scheduled' | 'rescheduled' | 'cancelled' | 'completed' | 'no_show' | 'requested' | 'declined' | 'unknown';
+export const CONFIRMED_STATUSES: readonly BookingStatus[] = ['scheduled', 'rescheduled', 'completed', 'no_show'];   // what counts as a real booking
 export interface Booking {
   id: string;
   ref: string | null;                 // external reference (booking system id)
@@ -112,6 +118,8 @@ export interface Booking {
   owner: string | null;               // the team member it is with
   service: string | null;
   source: { kind: 'external_calendar' | 'assistant' | 'manual' | 'unknown'; label: string };
+  requestedAt?: ISODate | null;       // when the request was made (status requested / declined)
+  announced?: boolean;                // the contact has been told the outcome of the request
   value: number | null;               // only when the backend stores it and the viewer may see it
   needsOutcome: boolean;              // in the past and still scheduled: someone must mark it completed / no-show
   automationsDone: Array<{ key: AutomationKey; at: ISODate | null; label: string }>;
@@ -142,7 +150,8 @@ export interface Conversation {
 }
 
 export type MessageAuthorKind = 'contact' | 'ai' | 'staff' | 'automation' | 'system';
-export type MessageStatus = 'received' | 'pending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'needs_template';
+// 'simulated' = DEMO: the system worked out the message but nothing was sent (it is never "sent" or "delivered").
+export type MessageStatus = 'received' | 'pending' | 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'needs_template' | 'simulated';
 export interface Message {
   id: string;
   conversationId: string;
@@ -154,6 +163,7 @@ export interface Message {
   statusNote: string | null;
   createdAt: ISODate | null;
   externalId: string | null;
+  event?: 'missed_call' | null;      // not a message: a phone call that was not answered (shown as an event in the thread)
   ai: null | {
     intent: string | null;
     action: string | null;
@@ -185,7 +195,8 @@ export interface Automation {
 export type ActivityKind =
   | 'contact_created' | 'message_received' | 'ai_replied' | 'ai_handoff' | 'booking_created' | 'booking_rescheduled'
   | 'booking_cancelled' | 'reminder_sent' | 'follow_up_sent' | 'outcome_checkin_sent' | 'review_requested'
-  | 'staff_replied' | 'contact_escalated' | 'report_generated' | 'automation_failed' | 'automation_skipped' | 'message_sent';
+  | 'staff_replied' | 'contact_escalated' | 'report_generated' | 'automation_failed' | 'automation_skipped' | 'message_sent'
+  | 'missed_call' | 'message_simulated' | 'booking_requested' | 'request_confirmed' | 'request_declined';
 export interface Activity {
   id: string;
   kind: ActivityKind;
@@ -200,7 +211,7 @@ export interface Activity {
 }
 
 // ---------------------------------------------------------------- tasks (derived: the backend has no task table)
-export type TaskKind = 'reply_needed' | 'next_action_due' | 'booking_outcome' | 'reply_failed' | 'first_response';
+export type TaskKind = 'reply_needed' | 'next_action_due' | 'booking_outcome' | 'reply_failed' | 'first_response' | 'booking_request';
 export interface Task {
   id: string;
   kind: TaskKind;

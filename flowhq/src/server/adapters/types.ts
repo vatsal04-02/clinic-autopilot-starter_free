@@ -22,7 +22,7 @@ export interface Supported { modules: ModuleKey[]; automations: AutomationKey[];
 
 export interface ContactQuery { q?: string; status?: string; stage?: string; attention?: boolean; limit?: number }
 export interface ConversationQuery { filter?: 'all' | 'unread' | 'attention' | 'ai' | 'paused' | 'mine'; q?: string }
-export interface BookingQuery { view?: 'upcoming' | 'past' | 'needs_outcome' | 'all'; q?: string }
+export interface BookingQuery { view?: 'upcoming' | 'past' | 'needs_outcome' | 'requests' | 'all'; q?: string }
 export interface ActivityQuery { kind?: ActivityKind | ''; contactId?: string; limit?: number }
 export interface ContactPatch { status?: string; owner?: string; notes?: string; nextActionAt?: string | null }
 export interface ConversationPatch { assignedTo?: string; automationPaused?: boolean; resolveAttention?: boolean; markRead?: boolean }

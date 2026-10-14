@@ -23,7 +23,7 @@ export const BASE_TERMINOLOGY: Terminology = {
   ai: { name: 'AI Assistant', short: 'AI' },
   contactStatus: { new: 'New', contacted: 'Contacted', booked: 'Booked', converted: 'Converted', lost: 'Lost' },
   contactStage: { hot: 'Hot', warm: 'Warm', cold: 'Cold' },
-  bookingStatus: { scheduled: 'Scheduled', rescheduled: 'Rescheduled', cancelled: 'Cancelled', completed: 'Completed', no_show: 'No-show' },
+  bookingStatus: { scheduled: 'Scheduled', rescheduled: 'Rescheduled', cancelled: 'Cancelled', completed: 'Completed', no_show: 'No-show', requested: 'Requested', declined: 'Declined', unknown: 'Not confirmed' },
   outcome: { better: 'Better', same: 'No change', worse: 'Worse' },
   automations: {
     contact_capture: { name: 'Website Capture', description: 'New {contact.plural|lower} from your website form land in {contact.plural|lower} instantly.' },
@@ -38,6 +38,8 @@ export const BASE_TERMINOLOGY: Terminology = {
     weekly_reports: { name: 'Weekly Reports', description: 'Every Monday: the numbers for last week, a short summary and suggested next steps.' },
     staff_reply: { name: 'Team Replies', description: 'Sends replies your team writes in the inbox through the official messaging gateway.' },
     error_alerts: { name: 'Error Alerts', description: 'Tells the agency when any automation step fails.' },
+    missed_call_capture: { name: 'Missed Calls', description: 'A missed call becomes a {contact.singular|lower} in your inbox and the team is alerted; the call-back message is a demo (nothing is sent) until it is approved.' },
+    request_confirmation: { name: '{booking.singular} Requests', description: 'When your team confirms or declines a requested {booking.singular|lower}, the {contact.singular|lower} is told, and a confirmation that would double-book is refused.' },
   },
   metrics: {},
 };

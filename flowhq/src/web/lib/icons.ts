@@ -1,7 +1,7 @@
 // Registry icon names -> lucide icons (the registries in src/core stay free of UI libraries).
 import {
-  Activity, AlarmClock, AlertTriangle, BarChart3, Bell, Calendar, CalendarClock, CalendarPlus, CalendarX, CreditCard, FileBarChart, FileText, Hand,
-  HeartPulse, Inbox, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageCircle, Repeat, Reply, Send, Settings, SkipForward, Sparkles, Star,
+  Activity, AlarmClock, AlertTriangle, BarChart3, Bell, Calendar, CalendarCheck, CalendarClock, CalendarPlus, CalendarX, CreditCard, FileBarChart, FileText, Hand,
+  HeartPulse, Inbox, LayoutDashboard, LineChart, ListChecks, Megaphone, MessageCircle, PhoneMissed, Repeat, Reply, Send, Settings, SkipForward, Sparkles, Star,
   Target, UserCog, UserPlus, Users, Workflow, type LucideIcon,
 } from 'lucide-react';
 export const ICONS: Record<string, LucideIcon> = {
@@ -10,6 +10,6 @@ export const ICONS: Record<string, LucideIcon> = {
   'user-cog': UserCog, 'line-chart': LineChart, 'credit-card': CreditCard, megaphone: Megaphone, 'file-text': FileText, 'user-plus': UserPlus,
   'message-circle': MessageCircle, hand: Hand, 'calendar-plus': CalendarPlus, 'calendar-clock': CalendarClock, 'calendar-x': CalendarX,
   'heart-pulse': HeartPulse, reply: Reply, 'alarm-clock': AlarmClock, 'file-bar-chart': FileBarChart, 'alert-triangle': AlertTriangle,
-  'skip-forward': SkipForward, send: Send,
+  'skip-forward': SkipForward, send: Send, 'phone-missed': PhoneMissed, 'calendar-check': CalendarCheck,
 };
 export const icon = (name: string): LucideIcon => ICONS[name] || Activity;

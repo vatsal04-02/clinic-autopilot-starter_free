@@ -18,14 +18,18 @@ export const TABLES = {
 // Columns, as used by the workflows (for reference and for write validation).
 export const COLUMNS = {
   leads: ['Lead_id', 'Lead_ID', 'Created_At', 'Name', 'Phone', 'Source', 'Page_URL', 'UTM_Campaign', 'Enquiry', 'AI_Summary', 'Likely_Service', 'Status', 'Owner', 'Next_Action_At', 'First_Response_At', 'Lost_Reason', 'Opted_Out', 'Escalated', 'Followup_Sent', 'Notes', 'Lead_Stage'],
-  appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent', 'Outcome_Sent'],
+  appointments: ['Booking_UID', 'Lead', 'Service', 'Physio', 'Start', 'End', 'Status', 'Fee_INR', 'R24_Sent', 'R2_Sent', 'Rebook_Sent', 'Review_Sent', 'Outcome_Sent', 'Requested_At', 'Confirm_Sent'],
   conversations: ['Lead', 'Phone', 'Last_Inbound_At', 'Unread', 'Automation_Paused', 'Assigned_To', 'Needs_Human', 'Handoff_Reason', 'Last_Intent'],
   messages: ['Conversation', 'Direction', 'Body', 'Template', 'Sent_By', 'WA_Message_ID', 'Status', 'Send', 'Created_At', 'Intent', 'AI_Action', 'AI_Confidence', 'AI_Status', 'Needs_Human', 'AI_Reply', 'AI_Reason'],
   runLog: ['Workflow', 'Record', 'Outcome', 'Error', 'At'],
   knowledge: ['Title', 'Category', 'Content', 'Active'],
 };
 export const LEAD_STATUS = { New: 'new', Contacted: 'contacted', Booked: 'booked', Converted: 'converted', Lost: 'lost' } as const;
-export const APPT_STATUS = { Booked: 'scheduled', Rescheduled: 'rescheduled', Cancelled: 'cancelled', Completed: 'completed', 'No-show': 'no_show' } as const;
+// An unknown Status is NEVER read as scheduled (that would report an unconfirmed row as a booking): see toBooking ('unknown').
+export const APPT_STATUS = { Booked: 'scheduled', Rescheduled: 'rescheduled', Cancelled: 'cancelled', Completed: 'completed', 'No-show': 'no_show', Requested: 'requested', Declined: 'declined' } as const;
+// Appointments.Status values that are real bookings (counted, reminded, reported); Requested / Declined are not.
+export const REAL_APPT_STATUSES = ['Booked', 'Rescheduled', 'Completed', 'No-show'];
+export const REQUEST_UID = /^req-/;
 export const KNOWLEDGE_CATEGORIES = ['services', 'pricing', 'hours', 'location', 'policy', 'faq', 'general'];
 
 // WhatsApp's customer-service window, as W12 / W10 apply it (24 h minus a 5-minute safety margin).
@@ -37,6 +41,8 @@ export const BOOKING_SYSTEM = 'Cal.com';                 // W4: the booking syst
 export const SENDERS: Record<string, AutomationKey> = {
   W3: 'speed_to_lead', W5: 'booking_reminders', W6: 'follow_ups', W7: 'outcome_checkins', W8: 'review_requests', W13: 'ai_assistant', W9: 'weekly_reports',
 };
+// Senders named after W12 (the one sender) plus the section that asked it ("W12-missed-call-ack"): matched before the plain W<n> rule.
+export const SENDER_NAMES: Record<string, AutomationKey> = { 'W12-missed-call-ack': 'missed_call_capture', 'W12-missed-call-alert': 'missed_call_capture', 'W12-request-confirm': 'request_confirmation' };
 
 // The n8n sections behind each universal automation. Run_Log names are what each section writes in Run_Log.Workflow.
 export interface AutomationImpl {
@@ -60,6 +66,8 @@ export const AUTOMATIONS: Record<AutomationKey, AutomationImpl> = {
   staff_reply: { ref: 'W10 → W12', runLog: ['W10-staff-reply'], trigger: { kind: 'schedule', schedule: { kind: 'every', minutes: 1 } }, measures: 'replies sent' },
   error_alerts: { ref: 'W11', runLog: [], trigger: { kind: 'event', label: 'When an automation step fails' }, measures: '' },
   ai_assistant: { ref: 'W13', runLog: ['W13-ai-receptionist'], trigger: { kind: 'event', label: 'When a message arrives (and 08:05 for overnight messages)' }, switchKey: 'ai_mode', switchKind: 'ai_mode', measures: 'messages handled' },
+  missed_call_capture: { ref: 'MCC', runLog: ['MCC-missed-call-capture'], trigger: { kind: 'event', label: 'When the phone system reports a missed call' }, switchKey: 'missed_call_enabled', switchKind: 'onoff', measures: 'missed calls captured' },
+  request_confirmation: { ref: 'REQ', runLog: ['REQ-request-confirm'], trigger: { kind: 'schedule', schedule: { kind: 'every', minutes: 2 } }, measures: 'request answers sent' },
 };
 export const AUTOMATION_BY_RUNLOG: Record<string, AutomationKey> = Object.fromEntries(
   Object.entries(AUTOMATIONS).flatMap(([k, v]) => v.runLog.map((r) => [r, k as AutomationKey])),
@@ -79,11 +87,15 @@ export const SETTINGS: SettingDef[] = [
   { key: 'TEST_MODE', section: 'channels', label: 'Test mode', help: 'On: every message to {contact.plural|lower} goes to the test phone instead. Missing counts as on.', type: 'boolean' },
   { key: 'TEST_PHONE', section: 'channels', label: 'Test phone', help: 'Where messages go while test mode is on.', type: 'phone', sensitive: true },
   { key: 'ai_mode', section: 'ai', label: 'Assistant mode', help: 'Off, Draft (replies wait for a person) or Auto (replies are sent).', type: 'choice', options: [{ value: 'off', label: 'Off' }, { value: 'draft', label: 'Draft' }, { value: 'auto', label: 'Auto' }] },
-  { key: 'booking_mode', section: 'ai', label: 'Booking by the assistant', help: 'Link: the {contact.singular|lower} confirms on the booking page. Direct: the assistant books the slot itself.', type: 'choice', options: [{ value: 'link', label: 'Booking link' }, { value: 'direct', label: 'Direct' }] },
+  { key: 'booking_mode', section: 'ai', label: 'Booking by the assistant', help: 'Link: the {contact.singular|lower} confirms on the booking page. Direct: the assistant books the slot itself. Request: the assistant only records a request that your team confirms or declines.', type: 'choice', options: [{ value: 'link', label: 'Booking link' }, { value: 'direct', label: 'Direct' }, { value: 'request', label: 'Request (team confirms)' }] },
+  { key: 'request_hold_hours', section: 'ai', label: 'Hold a request for (hours)', help: 'A requested time is kept from other {contact.plural|lower} for this long. Default 24.', type: 'number' },
+  { key: 'max_pending_requests', section: 'ai', label: 'Open requests per {contact.singular|lower}', help: 'More than this goes to a person. Default 2.', type: 'number' },
   { key: 'handoff_reply', section: 'ai', label: 'Hand-off reply', help: 'What the {contact.singular|lower} receives when a person takes over.', type: 'textarea' },
   { key: 'slot_minutes', section: 'ai', label: 'Slot length (minutes)', type: 'number' },
   { key: 'booking_capacity', section: 'ai', label: '{contact.plural} per slot', type: 'number' },
   { key: 'booking_notice_minutes', section: 'ai', label: 'Minimum notice (minutes)', type: 'number' },
+  { key: 'missed_call_enabled', section: 'automations', label: 'Missed-call capture', help: 'A missed call creates a {contact.singular|lower} and alerts the team. The call-back message is a demo (nothing is sent) until its template is approved.', type: 'boolean' },
+  { key: 'demo_mode', section: 'channels', label: 'Demo labels', help: 'Marks records and messages as demo. It does not change what is sent: that is set in the messaging workflow.', type: 'boolean' },
   { key: 'outcome_checkin', section: 'automations', label: 'Outcome check-ins', help: 'Switch on once the check-in template is approved for your number.', type: 'boolean' },
   { key: 'review_requests', section: 'automations', label: 'Review requests', help: 'Switch on once the review template is approved.', type: 'boolean' },
   { key: 'review_link', section: 'automations', label: 'Review link', help: 'Your own review page (https). Without it no review request is sent.', type: 'url' },

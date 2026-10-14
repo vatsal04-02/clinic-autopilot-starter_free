@@ -124,6 +124,35 @@ describe('flows through the API', () => {
     expect((await call(cookie, `/api/w/demo-physio/bookings/${b.id}`, 'PATCH', { status: 'cancelled' })).status).toBe(400);
     expect((await call(cookie, `/api/w/demo-physio/bookings/${b.id}`, 'PATCH', { status: 'completed' })).json.status).toBe('completed');
   });
+  it('an appointment request is listed apart from bookings and is confirmed or declined only by a signed-in team member with the CSRF header', async () => {
+    const cookie = await login('admin@test');
+    const lead = docs.DEMO_PHYSIO.LEADS[0].id;
+    const start = Math.floor(NOW / 1000) + 20 * 86400;
+    const row = { id: 9001, fields: { Booking_UID: 'req-api-1', Lead: lead, Service: 'Assessment', Start: start, End: start + 1800, Status: 'Requested', Requested_At: Math.floor(NOW / 1000) - 60 } as Record<string, unknown> };
+    docs.DEMO_PHYSIO.Appointments.push(row as never);
+    const refs = async (view: string) => (await call(cookie, `/api/w/demo-physio/bookings?view=${view}`)).json.map((b: { ref: string }) => b.ref);
+    expect(await refs('requests')).toContain('req-api-1');
+    for (const v of ['upcoming', 'all', 'past', 'needs_outcome']) expect(await refs(v), v).not.toContain('req-api-1');
+    expect((await call(cookie, '/api/w/demo-physio/workspace')).json.backend.capabilities).toMatchObject({ bookingRequests: true });
+    const messages = docs.DEMO_PHYSIO.Messages.length;
+    const url = '/api/w/demo-physio/bookings/9001';
+    expect((await call(cookie, url, 'PATCH', { status: 'scheduled' }, false)).status).toBe(403);   // no CSRF header
+    expect((await app.request(url, { method: 'PATCH', headers: J, body: JSON.stringify({ status: 'scheduled' }) })).status).toBe(401);   // no session
+    expect(row.fields.Status).toBe('Requested');
+    for (const bad of ['cancelled', 'rescheduled', 'requested', 'unknown', 'bogus']) expect((await call(cookie, url, 'PATCH', { status: bad })).status, bad).toBe(400);
+    const staffCookie = await login('staff@test');
+    expect((await call(staffCookie, url, 'PATCH', { status: 'scheduled' })).status).toBe(404);     // staff of another workspace cannot reach it
+    expect(row.fields.Status).toBe('Requested');
+    const ok = await call(cookie, url, 'PATCH', { status: 'scheduled' });
+    expect(ok.status).toBe(200);
+    expect(ok.json).toMatchObject({ status: 'scheduled', announced: false });
+    expect(row.fields.Status).toBe('Booked');
+    expect(docs.DEMO_PHYSIO.Messages.length).toBe(messages);                                       // FLOW HQ tells nobody: the automation does
+    expect(ok.text.match(SECRETS)?.[0] ?? null).toBeNull();
+    const again = await call(cookie, url, 'PATCH', { status: 'declined' });
+    expect(again.status).toBe(409);
+    expect(again.json.error.code).toBe('not_a_request');
+  });
   it('unknown routes answer JSON 404', async () => {
     const cookie = await login('admin@test');
     const r = await call(cookie, '/api/nothing-here');
@@ -137,7 +166,7 @@ describe('nothing secret reaches the browser', () => {
     const cookie = await login('admin@test');
     const paths = ['/api/health', '/api/me'];
     for (const w of ['demo-physio', 'demo-salon', 'demo-realty']) {
-      for (const p of ['workspace', 'dashboard?days=7', 'dashboard?days=30', 'contacts', 'conversations', 'bookings?view=all', 'automations', 'tasks', 'activity', 'reports', 'analytics', 'analytics?week=this', 'ai', 'knowledge', 'settings']) paths.push(`/api/w/${w}/${p}`);
+      for (const p of ['workspace', 'dashboard?days=7', 'dashboard?days=30', 'contacts', 'conversations', 'bookings?view=all', 'bookings?view=requests', 'automations', 'tasks', 'activity', 'reports', 'analytics', 'analytics?week=this', 'ai', 'knowledge', 'settings']) paths.push(`/api/w/${w}/${p}`);
       const convs = (await call(cookie, `/api/w/${w}/conversations`)).json;
       paths.push(`/api/w/${w}/conversations/${convs[0].id}`, `/api/w/${w}/contacts/${convs[0].contactId}`);
     }
