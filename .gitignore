@@ -2,3 +2,7 @@
 *.grist
 backups/
 node_modules/
+*.local.json
+
+# local demo
+.env.demo

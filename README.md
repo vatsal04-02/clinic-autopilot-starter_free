@@ -8,6 +8,10 @@ n8n + Grist + Caddy on one Hetzner server. Follow the steps in order.
 
 ---
 
+## LOCAL DEMO — missed call → AI receptionist → request → team confirms (₹0, nothing is sent)
+A self-contained demo with synthetic data, simulated messaging and a local AI. No paid API, no WhatsApp number, nothing exposed. Start here: **`n8n/demo/DEMO.md`**.
+`node n8n/demo/run-demo.js` plays the whole story offline (verified); `docker-compose.demo.yml` + `n8n/demo/patient-console.js` run it on a local n8n / Grist / Ollama / FLOW HQ.
+
 ## NO-DOMAIN MODE — laptop + Tailscale (₹0, easiest)
 
 No domain, no server, no Google login setup. n8n gets a permanent public HTTPS address for
